@@ -6,9 +6,9 @@
   "use strict";
   const T = PR.settingsTabs;
   const KIND_OF = { local: "free", free: "free", paid: "paid" };
-  const kindOf = (s, m) => (m.engine === "openai" ? KIND_OF[((s.presets.find((p) => p.id === m.preset) || {}).group) || "local"] || "free" : m.engine);
+  const kindOf = (s, m) => (m.engine === "openai" ? (m.preset ? KIND_OF[((s.presets.find((p) => p.id === m.preset) || {}).group) || "local"] || "free" : "custom") : m.engine);
   const hasKey = (s, preset) => (s.cfg.openai.saved_keys || []).includes(preset) || !!(s.chatKeys || {})[preset];
-  const isApi = (k) => k === "free" || k === "paid";
+  const isApi = (k) => k === "free" || k === "paid" || k === "custom";
 
   function cardsHtml(s) {
     const list = s.chat.models;
@@ -29,11 +29,17 @@
     let h = '<div class="mc-form"><h4 class="set-h">' + (s.editing === "new" ? "添加一个模型" : "修改“" + PR.esc(f.name || autoName(s, f)) + "”") + "</h4>" +
       '<div class="engine-cards small">' +
       card("claude", "Claude Code", "本机已登录的 Claude") + card("codex", "Codex CLI", "本机已登录的 ChatGPT") +
-      card("free", "免费模型", "本机 Ollama、智谱等") + card("paid", "付费 API", "DeepSeek、通义等") + "</div>";
+      card("free", "免费模型", "本机 Ollama、智谱等") + card("paid", "付费 API", "DeepSeek、通义等") + card("custom", "自定义中转站", "BASE_URL、Key、模型自己填") + "</div>";
     if (f.kind === "claude" || f.kind === "codex") {
-      h += '<label class="field"><span>模型</span>' + PR.cliModelSelect(s, f.kind, f.model, 'id="cmModel"', f.kind === "codex") + "</label>" +
+      h += '<label class="field"><span>模型</span>' + PR.cliModelInput(s, f.kind, f.model, 'id="cmModel"') + "</label>" +
+        '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label>" +
         '<p class="hint">' + (f.kind === "claude" ? "Opus / Sonnet 自动用 Claude Code 支持的最新版；新模型出来后运行 <code>claude update</code>。"
           : (PR.cliModelDesc(s, "codex", f.model) ? PR.esc(PR.cliModelDesc(s, "codex", f.model)) + "<br>" : "") + "名单和 Codex 里 <code>/model</code> 看到的一样。") + "</p>";
+    } else if (f.kind === "custom") {
+      h += '<label class="field"><span>BASE_URL</span><input class="input" id="cmBaseUrl" value="' + PR.esc(f.base_url) + '" placeholder="https://中转站/v1"></label>' +
+        '<div class="grid2"><label class="field"><span>模型</span><div style="display:flex;gap:6px"><input class="input" style="min-width:0" id="cmModel" list="cmModels" value="' + PR.esc(f.model) + '" placeholder="模型名"><button class="btn sm line" data-cm="refresh-models" title="从中转站读取模型">刷新</button></div><datalist id="cmModels">' + (f.models || []).map((x) => '<option value="' + PR.esc(x) + '">').join("") + "</datalist></label>" +
+        '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label></div>" +
+        '<label class="field"><span>API Key' + (f.hasKey ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key) + '" placeholder="sk-…" autocomplete="off"></label>';
     } else {
       const groups = s.groups.filter(([g]) => (KIND_OF[g] || "free") === f.kind);
       h += '<div class="preset-tiles grouped">' + groups.map(([g, label]) => '<div class="preset-group"><span>' + PR.esc(label) + "</span>" +
@@ -42,9 +48,10 @@
       const p = s.presets.find((x) => x.id === f.preset);
       if (p) {
         h += (p.note ? '<p class="hint preset-note">' + PR.esc(p.note) + (p.key_url ? ' <a href="' + p.key_url + '" target="_blank" rel="noopener">' + (p.key ? "获取 Key ↗" : "下载 ↗") + "</a>" : "") + "</p>" : "") +
-          '<div class="grid2"><label class="field"><span>模型</span><input class="input" id="cmModel" list="cmSugg" value="' + PR.esc(f.model) + '"><datalist id="cmSugg">' +
+          '<div class="grid2"><label class="field"><span>模型</span><div style="display:flex;gap:6px"><input class="input" style="min-width:0" id="cmModel" list="cmSugg" value="' + PR.esc(f.model) + '"><button class="btn sm line" data-cm="refresh-models" title="从中转站读取模型">刷新</button></div><datalist id="cmSugg">' +
           (p.models || []).map((x) => '<option value="' + PR.esc(x) + '">').join("") + "</datalist></label>" +
-          (p.key ? '<label class="field"><span>API Key' + (hasKey(s, p.id) ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key || "") + '" placeholder="sk-…" autocomplete="off"></label>' : "<span></span>") + "</div>";
+          (p.key ? '<label class="field"><span>API Key' + (hasKey(s, p.id) ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key || "") + '" placeholder="sk-…" autocomplete="off"></label>' : "<span></span>") + "</div>" +
+          '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label>";
       }
     }
     return h + '<label class="field"><span>显示的名字（可不填）</span><input class="input" id="cmName" value="' + PR.esc(f.name) + '" placeholder="' + PR.esc(autoName(s, f)) + '"></label>' +
@@ -66,12 +73,14 @@
     if (!f) return;
     const v = (id) => { const el = PR.$("#" + id); return el ? el.value.trim() : null; };
     if (v("cmModel") !== null) f.model = v("cmModel");
+    if (v("cmBaseUrl") !== null) f.base_url = v("cmBaseUrl");
     if (v("cmName") !== null) f.name = v("cmName");
     if (v("cmKey") !== null) f.key = v("cmKey");
+    if (v("cmEffort") !== null) f.reasoning_effort = v("cmEffort");
   }
   function startForm(s, m) {
-    s.form = m ? { kind: kindOf(s, m), model: m.model || "", preset: m.preset || "", name: m.name === m.label || m.name === "GPT" ? "" : m.name || "", key: "" }
-      : { kind: "claude", model: "opus", preset: "", name: "", key: "" };
+    s.form = m ? { id: m.id, kind: kindOf(s, m), model: m.model || "", preset: m.preset || "", base_url: m.base_url || "", name: m.name === m.label || m.name === "GPT" ? "" : m.name || "", key: "", hasKey: !!m.has_key, reasoning_effort: m.reasoning_effort || "", models: [] }
+      : { id: "", kind: "claude", model: "opus", preset: "", base_url: "", name: "", key: "", hasKey: false, reasoning_effort: "", models: [] };
   }
 
   T.chat = {
@@ -86,25 +95,39 @@
       if (e.target.id === "cmModel" && e.target.tagName === "SELECT") { readForm(s); return true; }  // 换了模型，说明和默认名字跟着变
       return false;
     },
-    click(e, s) {
+    async click(e, s) {
       const k = e.target.closest("[data-cmk]");
       if (k && s.form) {
         readForm(s);
         const f = s.form, kind = k.dataset.cmk;
         if (kind === f.kind) return false;
-        Object.assign(f, { kind, model: kind === "claude" ? "opus" : "", name: "", key: "" });
+        Object.assign(f, { kind, model: kind === "claude" ? "opus" : "", preset: kind === "custom" ? "" : f.preset, base_url: kind === "custom" ? "" : f.base_url, name: "", key: "", hasKey: false, reasoning_effort: "", models: [] });
         if (isApi(kind)) {
-          const ol = s.found && s.found.ollama && s.found.ollama.running;
-          f.preset = kind === "paid" ? "deepseek" : ol ? "ollama" : "zhipu";
-          f.model = (s.presets.find((p) => p.id === f.preset) || {}).model || "";
+          if (kind !== "custom") {
+            const ol = s.found && s.found.ollama && s.found.ollama.running;
+            f.preset = kind === "paid" ? "deepseek" : ol ? "ollama" : "zhipu";
+            const preset = s.presets.find((p) => p.id === f.preset) || {};
+            f.model = preset.model || ""; f.base_url = preset.base_url || "";
+          }
         }
         return true;
       }
       const pb = e.target.closest("[data-cmp]");
-      if (pb && s.form) { readForm(s); Object.assign(s.form, { preset: pb.dataset.cmp, model: (s.presets.find((p) => p.id === pb.dataset.cmp) || {}).model || "", key: "", name: "" }); return true; }
+      if (pb && s.form) { readForm(s); const p = s.presets.find((x) => x.id === pb.dataset.cmp) || {}; Object.assign(s.form, { preset: pb.dataset.cmp, base_url: p.base_url || "", model: p.model || "", key: "", name: "", hasKey: hasKey(s, pb.dataset.cmp), models: [] }); return true; }
       const b = e.target.closest("[data-cm]");
       if (!b) return false;
       const i = +b.dataset.i, list = s.chat.models, act = b.dataset.cm;
+      if (act === "refresh-models") {
+        readForm(s);
+        const base = s.form.kind === "custom" ? s.form.base_url : ((s.presets.find((p) => p.id === s.form.preset) || {}).base_url || s.form.base_url);
+        if (!base) { PR.toast("先填 BASE_URL"); return false; }
+        try {
+          const r = await PR.api("/api/models", { method: "POST", body: { scope: "chat", model_id: s.form.id, base_url: base, api_key: s.form.key || (s.form.hasKey ? "••••" : "") } });
+          s.form.models = r.models || [];
+          PR.toast("已读取 " + s.form.models.length + " 个模型");
+        } catch (err) { PR.toast("读取模型失败：" + PR.esc(err.message)); }
+        return true;
+      }
       if (act === "more") {
         const m = list[i];
         PR.menu(b, [
@@ -130,11 +153,12 @@
         const f = s.form, api = isApi(f.kind);
         const p = s.presets.find((x) => x.id === f.preset);
         if (api && !f.model) { PR.toast("填一个模型名"); return false; }
+        if (f.kind === "custom" && !f.base_url) { PR.toast("填 BASE_URL"); return false; }
         if (api && p && p.key && !hasKey(s, f.preset) && !f.key) { PR.toast("这家要填 API Key"); return false; }
         if (api && f.key) (s.chatKeys = s.chatKeys || {})[f.preset] = f.key;
         const name = f.name || autoName(s, f);
-        const m = { engine: api ? "openai" : f.kind, preset: api ? f.preset : "", model: f.model, name, label: name,
-          source: api ? (p ? p.name : "API") : f.kind === "claude" ? "Claude Code" : "Codex CLI", detail: f.model || "跟随 Codex 默认", ready: true };
+        const m = { engine: api ? "openai" : f.kind, preset: api && f.kind !== "custom" ? f.preset : "", base_url: api && f.kind === "custom" ? f.base_url : "", api_key: api ? (f.key || (f.hasKey ? "••••" : "")) : "", model: f.model, reasoning_effort: f.reasoning_effort || "", name, label: name,
+          source: api ? (f.kind === "custom" ? "自定义中转站" : p ? p.name : "API") : f.kind === "claude" ? "Claude Code" : "Codex CLI", detail: f.model || "跟随 Codex 默认", ready: true };
         if (s.editing === "new") list.push(Object.assign(m, { id: "m" + Date.now().toString(36) }));
         else Object.assign(list.find((x) => x.id === s.editing), m);
         s.editing = null; s.form = null;

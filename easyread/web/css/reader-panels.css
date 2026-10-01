@@ -27,13 +27,17 @@ body.drawer-open #scrim { opacity: 1; pointer-events: auto; }
 .about .row { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* 右侧面板（原页 / 笔记，一次一个） */
-.side-panel { position: fixed; top: var(--bar-h); right: 0; bottom: 0; z-index: 40; width: var(--side-w); background: var(--surface); border-left: 1px solid var(--rule); transform: translateX(102%); transition: transform .3s ease; display: flex; flex-direction: column; }
+.side-panel { position: fixed; top: var(--bar-h); right: 0; bottom: 0; z-index: 40; width: var(--reader-side-w); background: var(--surface); border-left: 1px solid var(--rule); transform: translateX(102%); transition: transform .3s ease; display: flex; flex-direction: column; }
 body.pv-open #pageview, body.np-open #notespanel { transform: none; }
+body.ch-open #chatpanel, body.dr-open #deepreadpanel { transform: none; }
 @media (min-width: 1180px) {
   /* 右侧开着面板：边注收进正文（页边的小数字），版心在剩下的地方居中，放不下就变窄 */
-  body.side-open #stage { grid-template-columns: var(--gutter) minmax(0, var(--measure)) var(--gutter); width: min(calc(var(--measure) + 2 * var(--gutter)), calc(100vw - var(--side-w) - 24px));
-    margin-right: calc(var(--side-w) + 8px); margin-left: max(12px, calc((100vw - var(--side-w) - var(--measure) - 2 * var(--gutter)) / 2)); }
+  body.side-open #stage { grid-template-columns: var(--gutter) minmax(0, var(--measure)) var(--gutter); width: min(calc(var(--measure) + 2 * var(--gutter)), calc(100vw - var(--reader-side-w) - 24px));
+    margin-right: calc(var(--reader-side-w) + 8px); margin-left: max(12px, calc((100vw - var(--reader-side-w) - var(--measure) - 2 * var(--gutter)) / 2)); }
 }
+.side-panel-grip { position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize; z-index: 3; touch-action: none; }
+.side-panel-grip:hover, body.reader-resizing .side-panel-grip, .side-panel-grip:focus-visible { background: linear-gradient(90deg, transparent 2px, var(--accent) 2px, var(--accent) 4px, transparent 4px); outline: 0; }
+body.reader-resizing { cursor: col-resize; user-select: none; }
 .pv-head { display: flex; align-items: center; gap: 4px; height: 46px; padding: 0 8px; border-bottom: 1px solid var(--rule); font-size: 13px; color: var(--ink-2); flex: none; }
 .pv-head .grow { flex: 1; }
 .pv-label { min-width: 88px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -50,9 +54,18 @@ body.pv-zoom .pv-page { width: 165%; max-width: none; }
 
 /* 笔记面板 */
 /* 笔记、问 AI 和原页一样宽（约占右侧 44%）；窄屏时盖在正文上 */
-@media (max-width: 1179px) { #notespanel, #chatpanel { width: min(600px, 100vw); } }
-@media (max-width: 760px) { #pageview { width: 100vw; } .pv-follow { white-space: nowrap; } }
+@media (max-width: 1179px) { #notespanel, #chatpanel, #deepreadpanel { width: min(600px, 100vw); } }
+@media (max-width: 760px) { #pageview, #deepreadpanel { width: 100vw; } .side-panel-grip { display: none; } .pv-follow { white-space: nowrap; } }
 .np-head { display: flex; align-items: center; gap: 6px; height: 50px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--rule); flex: none; }
+.dr-head { display: flex; align-items: center; gap: 8px; min-height: 50px; padding: 7px 10px 7px 14px; border-bottom: 1px solid var(--rule); flex: none; }
+.dr-head small { display: block; margin-top: 2px; color: var(--ink-3); font-size: 11px; font-weight: 400; }
+.dr-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--rule); flex: none; }
+.dr-scroll { flex: 1; overflow: auto; padding: 16px 18px 28px; }
+.dr-doc { font-size: 14px; line-height: 1.75; }
+.dr-doc h1, .dr-doc h2, .dr-doc h3 { margin: 1.2em 0 .5em; }
+.dr-doc p { margin: .65em 0; }
+.dr-status, .dr-empty, .dr-error { padding: 18px 4px; }
+.dr-error { color: var(--bad, #a33); white-space: pre-wrap; }
 .np-head .grow { flex: 1; }
 .np-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 12px 16px 4px; }
 .np-filters button { padding: 2px 10px; border-radius: 12px; font-size: 12px; color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--rule); }

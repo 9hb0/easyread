@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 
-from . import config, translate
+from . import config, deepread, translate
 from .engines import Cancelled, EngineError
 from .library import Library
 from .log import log
@@ -52,6 +52,10 @@ class Jobs:
             if job.get("state") in ("queued", "running"):
                 self._write(ws, state="queued", message="排队中（服务重启后继续）")
                 self.bulk.put(ws.id)
+            state = deepread.read(ws)
+            if state["state"] in ("queued", "running"):
+                deepread.set_state(ws, state="queued", message="排队中（服务重启后继续）")
+                self.small.put({"id": f"j{int(time.time() * 1000)}", "kind": "deepread", "pid": ws.id})
 
     def _bulk_loop(self):
         while True:
@@ -119,6 +123,17 @@ class Jobs:
         self.small.put(job)
         return job
 
+    def submit_deepread(self, ws: Workspace, cfg: dict | None = None) -> dict:
+        """只由用户明确调用时排队；同一篇论文的活动任务不重复排队。"""
+        source = cfg or config.load()
+        setting = source.get("deepread") or {}
+        chat = source.get("chat") or {}
+        state, created = deepread.claim(ws, setting.get("model") or chat.get("default") or "",
+                                        setting.get("prompt") or deepread.DEFAULT_PROMPT)
+        if created:
+            self.submit_small("deepread", ws.id)
+        return state
+
     def small_status(self, pid: str | None = None) -> list[dict]:
         with self.lock:
             return [dict(j) for j in self.recent if not pid or j["pid"] == pid]
@@ -136,7 +151,12 @@ class Jobs:
                     translate.answer(ws, cfg, job["note"], None)
                 elif job["kind"] == "retranslate":
                     translate.retranslate(ws, cfg, job["key"], job.get("hint", ""), None)
+                elif job["kind"] == "deepread":
+                    deepread.set_state(ws, state="running", message="模型思考中", error="")
+                    deepread.generate(ws, cfg, None)
                 job["state"], job["message"] = "done", "完成"
             except Exception as e:  # noqa: BLE001
                 job["state"], job["message"] = "error", str(e)[:500]
+                if job["kind"] == "deepread":
+                    deepread.set_state(ws, state="error", message="精读失败", error=str(e)[:500])
                 log.exception("小任务出错 %s", job.get("kind"))

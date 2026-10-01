@@ -140,6 +140,10 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
             pdfwork.locate(ws.root)
         except Exception:  # noqa: BLE001 —— 定位失败不影响阅读
             log.exception("locate 失败 %s", ws.id)
+        try:
+            pdfwork.materialize_figures(ws.root)
+        except Exception:  # noqa: BLE001 —— 裁图失败不影响阅读
+            log.exception("裁图失败 %s", ws.id)
 
 
 def _save_checks(ws: Workspace, checks, batch: list[int]) -> None:

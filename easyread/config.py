@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from .chat_models import DEFAULT_CHAT
+from .deepread import DEFAULT_PROMPT
 from .presets import PRESET_GROUPS, PRESETS  # noqa: F401
 from .store import read_json, write_json_atomic
 
@@ -29,11 +30,12 @@ DEFAULTS = {
     "auto_translate": True,      # 导入后自动开始翻译
     "batch_pages": 2,            # 每次交给模型的页数
     "concurrency": 1,            # 同时翻译几批
-    "claude": {"command": "claude", "model": "", "extra_args": [], "timeout": 1200},
-    "codex": {"command": "codex", "model": "", "extra_args": [], "timeout": 1200},
-    "openai": {"preset": "", "base_url": "", "api_key": "", "model": "", "vision": False, "timeout": 600},
+    "claude": {"command": "claude", "model": "", "reasoning_effort": "", "extra_args": [], "timeout": 1200},
+    "codex": {"command": "codex", "model": "", "reasoning_effort": "", "extra_args": [], "timeout": 1200},
+    "openai": {"preset": "", "base_url": "", "api_key": "", "model": "", "reasoning_effort": "", "vision": False, "timeout": 600},
     # 阅读页右侧“问 AI”的模型名单和默认模型，见 chat_models.py
     "chat": copy.deepcopy(DEFAULT_CHAT),
+    "deepread": {"model": "", "prompt": DEFAULT_PROMPT},
 }
 
 def _merge(base: dict, over: dict) -> dict:
@@ -89,6 +91,8 @@ def public(cfg: dict) -> dict:
     out["openai"]["api_key"] = ("••••" + key[-4:]) if key else ""
     out["openai"]["has_key"] = bool(key)
     out["openai"]["saved_keys"] = [k for k, v in (out["openai"].pop("keys", None) or {}).items() if v]
+    for model in (out.get("chat") or {}).get("models", []):
+        model["has_key"] = bool(model.pop("api_key", ""))
     return out
 
 

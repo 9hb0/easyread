@@ -147,6 +147,14 @@
     const setStatus = (s) => () => L.patch(id, { status: s });
     PR.menu(where, [
       { label: "打开阅读", icon: "book", kbd: "Enter", fn: () => L.openReader(id) },
+      { label: "生成精读 / 查看", icon: "book", fn: async () => {
+        const state = await PR.api("/api/p/" + id + "/deepread");
+        if (!state.has_document && !["queued", "running"].includes(state.state)) {
+          await PR.api("/api/p/" + id + "/deepread", { method: "POST", body: {} });
+          PR.toast("精读已排队");
+        }
+        L.openReader(id, true);
+      } },
       { label: "打开原 PDF", icon: "pdf", fn: () => window.open("/p/" + id + "/source.pdf") },
       "-",
       { label: i.starred ? "取消星标" : "加星标", icon: "star", kbd: "S", fn: () => L.patch(id, { starred: !i.starred }) },

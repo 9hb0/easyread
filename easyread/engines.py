@@ -17,6 +17,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 from pathlib import Path
 
 
@@ -29,6 +30,7 @@ class Cancelled(RuntimeError):
 
 
 ENGINE_NAMES = {"claude": "Claude Code", "codex": "Codex CLI", "openai": "API", "none": "不翻译"}
+REASONING_EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
 
 
 def run(cfg: dict, prompt: str, cwd: Path, images: list[Path] | None = None, cancel: threading.Event | None = None) -> str:
@@ -85,6 +87,8 @@ def run_claude(c: dict, prompt: str, cwd: Path, cancel=None) -> str:
     args = [exe, "-p", *_CLAUDE_ARGS]
     if c.get("model"):
         args += ["--model", c["model"]]
+    if c.get("reasoning_effort"):
+        args += ["--effort", c["reasoning_effort"]]
     args += list(c.get("extra_args") or [])
     out = _communicate(_popen(args, cwd), prompt, int(c.get("timeout") or 1200), cancel)
     try:
@@ -108,6 +112,8 @@ def run_codex(c: dict, prompt: str, cwd: Path, images: list[Path], cancel=None) 
     args = [exe, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--color", "never", "-o", last]
     if c.get("model"):
         args += ["--model", c["model"]]
+    if c.get("reasoning_effort"):
+        args += ["-c", f"model_reasoning_effort={json.dumps(c['reasoning_effort'])}"]
     for img in images:
         args += ["-i", str(img)]
     args += list(c.get("extra_args") or []) + ["-"]
@@ -145,8 +151,17 @@ def _communicate(proc, stdin_text: str, timeout: int, cancel) -> str:
 
 
 # ---------- OpenAI 兼容接口 ----------
+def openai_base(base_url: str) -> str:
+    """补齐常见的 OpenAI 兼容根地址；带具体路径的中转站保持原样。"""
+    base = (base_url or "").rstrip("/")
+    parts = urlsplit(base)
+    if parts.scheme and parts.netloc and parts.path in ("", "/"):
+        return urlunsplit((parts.scheme, parts.netloc, "/v1", parts.query, parts.fragment))
+    return base
+
+
 def run_openai(c: dict, prompt: str, images: list[Path], cancel=None) -> str:
-    base = (c.get("base_url") or "").rstrip("/")
+    base = openai_base(c.get("base_url") or "")
     if not base or not c.get("model"):
         raise EngineError("API 没填地址或模型（设置 → 翻译引擎）")
     content = prompt
@@ -155,6 +170,8 @@ def run_openai(c: dict, prompt: str, images: list[Path], cancel=None) -> str:
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(p.read_bytes()).decode()}}
             for p in images]
     body = {"model": c["model"], "temperature": 0.2, "messages": [{"role": "user", "content": content}]}
+    if c.get("reasoning_effort"):
+        body["reasoning_effort"] = c["reasoning_effort"]
     headers = {"Content-Type": "application/json"}
     if c.get("api_key"):
         headers["Authorization"] = "Bearer " + c["api_key"]
@@ -188,6 +205,40 @@ def run_openai(c: dict, prompt: str, images: list[Path], cancel=None) -> str:
     if choice.get("finish_reason") == "length":
         raise EngineError("模型输出被截断了（超过它的输出长度上限）。在设置里把“每次交给模型的页数”调成 1 页再试。")
     return text
+
+
+def _api_root(base_url: str) -> str:
+    base = (base_url or "").rstrip("/")
+    for suffix in ("/chat/completions", "/models"):
+        if base.endswith(suffix):
+            base = base[:-len(suffix)]
+    return openai_base(base).rstrip("/")
+
+
+def list_models(base_url: str, api_key: str = "") -> list[str]:
+    """读取 OpenAI 兼容中转站的模型列表，不记录 Key。"""
+    root = _api_root(base_url)
+    if not root:
+        raise EngineError("没填 BASE_URL")
+    headers = {"Accept": "application/json"}
+    if api_key and not api_key.startswith("••••"):
+        headers["Authorization"] = "Bearer " + api_key
+    req = urllib.request.Request(root + "/models", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read()[:300].decode("utf-8", "replace")
+        raise EngineError(f"读取模型列表失败 {e.code}：{detail}")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise EngineError(f"读取模型列表失败：{e}")
+    rows = data.get("data") or data.get("models") or []
+    out = []
+    for row in rows:
+        value = row.get("id") if isinstance(row, dict) else row
+        if value and str(value) not in out:
+            out.append(str(value))
+    return out
 
 
 def _sleep(seconds: float, cancel) -> None:

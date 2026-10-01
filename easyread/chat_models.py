@@ -87,11 +87,14 @@ def engine_cfg(cfg: dict, mid: str | None) -> tuple[dict, dict]:
     out["engine"] = m["engine"]
     if m["engine"] in ("claude", "codex"):
         out[m["engine"]]["model"] = m.get("model") or ""
+        out[m["engine"]]["reasoning_effort"] = m.get("reasoning_effort") or ""
     elif m["engine"] == "openai":
         p = next((x for x in PRESETS if x["id"] == m.get("preset")), None)
         out["openai"] = {**out["openai"], "preset": m.get("preset") or "", "vision": False,
                          "base_url": m.get("base_url") or (p["base_url"] if p else out["openai"].get("base_url", "")),
-                         "model": m.get("model") or (p["model"] if p else ""), "api_key": _key(cfg, m.get("preset") or "")}
+                         "model": m.get("model") or (p["model"] if p else ""),
+                         "api_key": m.get("api_key") or _key(cfg, m.get("preset") or ""),
+                         "reasoning_effort": m.get("reasoning_effort") or ""}
     else:
         raise engines.EngineError(f"不认识的模型来源：{m.get('engine')}")
     return out, m
@@ -121,19 +124,21 @@ def listing(cfg: dict) -> dict:
             hint = "" if ready else f"本机没找到 {source}"
         else:
             p = next((x for x in PRESETS if x["id"] == m.get("preset")), None)
-            ready = bool(_key(cfg, m.get("preset") or "")) or not needs_key({"preset": m.get("preset"), "base_url": m.get("base_url", "")})
+            ready = bool(m.get("api_key") or _key(cfg, m.get("preset") or "")) or not needs_key({"preset": m.get("preset"), "base_url": m.get("base_url", "")})
             source = p["name"] if p else "自定义接口"
             hint = "" if ready else f"还没填 {source} 的 Key（设置 → 问 AI → 改）"
-        out.append({**m, "label": label(m), "source": source, "ready": ready, "hint": hint,
+        out.append({**{k: v for k, v in m.items() if k != "api_key"}, "label": label(m), "source": source, "ready": ready, "hint": hint,
+                    "has_key": bool(m.get("api_key")) or bool(_key(cfg, m.get("preset") or "")),
                     "detail": (actual_of(m.get("model", "")) or m.get("model")) if e == "claude"
                     else m.get("model") or ((codex_default_model() + "（跟随 Codex 默认）") if e == "codex" and codex_default_model() else "")})
     default = (cfg.get("chat") or {}).get("default") or (out[0]["id"] if out else "")
     return {"models": out, "default": default, "presets": [{"id": p["id"], "name": p["name"], "models": p.get("models", [])} for p in PRESETS]}
 
 
-def sanitize(items: list[dict]) -> list[dict]:
+def sanitize(items: list[dict], previous: list[dict] | None = None) -> list[dict]:
     """设置页提交的名单：去掉空项、补 id。"""
     out, seen = [], set()
+    old = {str(m.get("id")): m for m in (previous or [])}
     for k, m in enumerate(items or []):
         e = m.get("engine")
         if e not in ("claude", "codex", "openai") or (e == "openai" and not (m.get("preset") or m.get("base_url"))):
@@ -142,6 +147,11 @@ def sanitize(items: list[dict]) -> list[dict]:
         while mid in seen:
             mid += "-2"
         seen.add(mid)
+        key = m.get("api_key")
+        if not key or str(key).startswith("••••"):
+            key = (old.get(mid) or {}).get("api_key", "")
         out.append({"id": mid, "name": str(m.get("name") or m.get("model") or "模型")[:40], "engine": e,
-                    "model": str(m.get("model") or "")[:120], "preset": str(m.get("preset") or ""), "base_url": str(m.get("base_url") or "")[:300]})
+                    "model": str(m.get("model") or "")[:120], "preset": str(m.get("preset") or ""),
+                    "base_url": str(m.get("base_url") or "")[:300], "api_key": str(key or "")[:500],
+                    "reasoning_effort": str(m.get("reasoning_effort") or "")[:20]})
     return out or copy.deepcopy(DEFAULT_MODELS)

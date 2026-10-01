@@ -84,13 +84,16 @@
   PR.$('[data-act="pages"]').addEventListener("mouseenter", () => PR.preloadPage && PR.preloadPage());  // 鼠标移过去就开始加载
   PR.$('[data-act="notes"]').innerHTML = PR.icon("note", "sm") + "<span>笔记</span>";
   PR.$('[data-act="chat"]').innerHTML = PR.icon("sparkle", "sm") + "<span>问 AI</span>";
+  PR.$('[data-act="deepread"]').innerHTML = PR.icon("book", "sm") + "<span>精读</span>";
   /* 设置里关掉的功能：顶栏按钮也藏起来 */
   PR.applyFeatures = function () {
     const set = (sel, on) => { const el = PR.$(sel); if (el) el.style.display = on ? "" : "none"; };
     set('[data-act="pages"]', PR.feature("pages"));
     set('[data-act="chat"]', PR.feature("chat") && PR.chatView());
+    set('[data-act="deepread"]', PR.store.mode === "server");
     if (!PR.feature("pages") && PR.side === "pages") PR.openSide(null);
     if (!PR.feature("chat") && PR.side === "chat") PR.openSide(null);
+    if (PR.store.mode !== "server" && PR.side === "deepread") PR.openSide(null);
   };
   PR.on("ui-changed", () => { PR.applyFeatures(); PR.hideBlockbar && PR.hideBlockbar(); PR.renderMargin && PR.renderMargin(); });
   PR.$("#bar").addEventListener("click", (e) => {
@@ -103,6 +106,7 @@
     if (act === "pages") PR.togglePages();
     if (act === "notes") PR.toggleNotesPanel();
     if (act === "chat") PR.toggleChat();
+    if (act === "deepread") PR.toggleDeepRead();
     if (act === "settings") { PR.renderSettings(); PR.$("#settings").classList.toggle("open"); }
     if (act === "about") PR.toggleDrawer(true, "about");
   });

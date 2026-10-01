@@ -32,6 +32,7 @@
   <button class="btn" data-act="pages" title="原文页，跟随阅读位置（O）"></button>
   <button class="btn" data-act="notes" title="笔记面板（M）"></button>
   <button class="btn" data-act="chat" title="边读边问 AI（A）"></button>
+  <button class="btn" data-act="deepread" title="精读论文"></button>
   <button class="btn" data-act="settings" title="字号、版心、主题（=、- 调字号）">Aa</button>
   <button class="save-state" data-act="about" title="保存状态"><i></i><span>…</span></button>
 </header>
@@ -53,6 +54,7 @@
 </main>
 
 <section id="pageview" class="side-panel" aria-label="原文页">
+  <div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div>
   <div class="pv-head">
     <button class="btn icon" data-pv="prev" title="上一页（[）">‹</button>
     <span class="pv-label"></span>
@@ -66,8 +68,9 @@
   <div class="pv-scroll"><div class="pv-page"><img alt=""><div class="pv-hl"></div></div></div>
 </section>
 
-<section id="notespanel" class="side-panel" aria-label="笔记"></section>
-<section id="chatpanel" class="side-panel" aria-label="问 AI"></section>
+<section id="notespanel" class="side-panel" aria-label="笔记"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
+<section id="chatpanel" class="side-panel" aria-label="问 AI"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
+<section id="deepreadpanel" class="side-panel" aria-label="精读论文"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
 <div class="dialog-backdrop" id="readerDlg"><div class="dialog" role="dialog"></div></div>
 <div class="dialog-backdrop" id="settingsDlg"><div class="dialog" role="dialog" aria-label="设置"></div></div>
 <div class="dialog-backdrop" id="textDlg"><div class="dialog wide" role="dialog"></div></div>
@@ -94,6 +97,7 @@
 <script src="/web/js/reader/pageview.js"></script>
 <script src="/web/js/reader/notespanel.js"></script>
 <script src="/web/js/reader/chat.js"></script>
+<script src="/web/js/reader/deepread.js"></script>
 <script src="/web/js/reader/jumpback.js"></script>
 <script src="/web/js/reader/keys.js"></script>
 <script src="/web/js/reader/export.js"></script>
@@ -101,6 +105,7 @@
 <script src="/web/js/common/settings.js"></script>
 <script src="/web/js/common/settings-tabs.js"></script>
 <script src="/web/js/common/settings-chat.js"></script>
+<script src="/web/js/common/settings-deepread.js"></script>
 <script src="/web/js/reader/main.js"></script>
 </body>
 </html>

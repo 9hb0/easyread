@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import __version__, chat, chat_models, chat_store, cli_models, config, detect, engines, paperdata, pdfwork, prefs
+from . import __version__, chat, chat_models, chat_store, cli_models, config, deepread, detect, engines, paperdata, pdfwork, prefs
 from .log import log, setup as setup_log, tail
 from .jobs import Jobs
 from .library import Library
@@ -184,6 +184,11 @@ class Handler(BaseHTTPRequestHandler):
             if action == "state":
                 ws.patch_item({"last_opened": now_iso()})
                 _warm(ws.root)
+                try:
+                    if (ws.root / "layout.json").exists():
+                        pdfwork.materialize_figures(ws.root)
+                except Exception:  # noqa: BLE001 —— 旧论文裁图失败不影响打开
+                    log.exception("旧论文补裁图失败 %s", ws.id)
                 return self._json(200, {
                     **{n: ws.load(n) for n in ("paper", "discussion", "reader", "layout", "item", "job")},
                     "versions": ws.versions(), "token": app.token, "id": ws.id,
@@ -192,6 +197,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, ws.versions())
             if action == "chat":
                 return self._json(200, {"threads": chat_store.threads(ws), **chat_models.listing(config.load())})
+            if action == "deepread":
+                return self._json(200, deepread.read(ws))
             if action == "log":
                 return self._json(200, {"text": tail(ws.root / "job.log", 300)})
             if action == "export":
@@ -253,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self._body() or b"{}")
             patch = {}
             if "models" in body:
-                patch["models"] = chat_models.sanitize(body["models"])
+                patch["models"] = chat_models.sanitize(body["models"], (config.load().get("chat") or {}).get("models"))
             if body.get("default"):
                 patch["default"] = str(body["default"])
             full = {"chat": patch}
@@ -263,6 +270,22 @@ class Handler(BaseHTTPRequestHandler):
                 full["openai"] = {"keys": keys}
             config.save(full)
             return self._json(200, chat_models.listing(config.load()))
+        if path == "/api/models":
+            body = json.loads(self._body() or b"{}")
+            cfg = config.load()
+            base_url = str(body.get("base_url") or cfg.get("openai", {}).get("base_url") or "")
+            api_key = str(body.get("api_key") or "")
+            if not api_key or api_key.startswith("••••"):
+                if body.get("scope") == "translation":
+                    api_key = cfg.get("openai", {}).get("api_key") or ""
+                else:
+                    model = next((m for m in (cfg.get("chat") or {}).get("models", []) if m.get("id") == body.get("model_id")), {})
+                    api_key = model.get("api_key") or chat_models._key(cfg, model.get("preset") or "")
+            try:
+                models = engines.list_models(base_url, api_key)
+            except engines.EngineError as e:
+                raise ValueError(str(e))
+            return self._json(200, {"models": models})
         if path == "/api/config/test":
             cfg = config.load()
             patch = json.loads(self._body() or b"{}")
@@ -288,6 +311,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"threads": chat_store.threads(ws)})
             if action == "chat":
                 return self._chat(ws, body)
+            if action == "deepread":
+                return self._json(200, app.jobs.submit_deepread(ws, config.load()))
             if action == "ops":
                 ops = body.get("ops") or []
                 if not isinstance(ops, list):

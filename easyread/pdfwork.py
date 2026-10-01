@@ -9,7 +9,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from .store import write_json_atomic
+from .store import dir_lock, write_json_atomic
 
 
 def render_pages(pdf: Path, out_dir: Path, scale: float = 2.4, quality: int = 84) -> list[dict]:
@@ -147,6 +147,41 @@ def locate(root: Path) -> dict:
     _fill_gaps(paper.get("blocks", []), layout)
     write_json_atomic(root / "layout.json", layout)
     return layout
+
+
+def materialize_figures(root: Path) -> dict[str, str]:
+    """按 layout.json 的定位框从原 PDF 裁出图，并把路径写回 figure 块。"""
+    with dir_lock(root):
+        paper_path = root / "paper.json"
+        layout_path = root / "layout.json"
+        if not paper_path.exists() or not layout_path.exists():
+            return {}
+        paper = json.loads(paper_path.read_text(encoding="utf-8"))
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        generated: dict[str, str] = {}
+        for block in paper.get("blocks", []):
+            if block.get("type") != "figure":
+                continue
+            src = str(block.get("src") or "")
+            if src and (root / src).is_file():
+                continue
+            loc = layout.get(block.get("id")) or {}
+            box = loc.get("box")
+            page = loc.get("page") or block.get("page")
+            if not isinstance(box, list) or len(box) != 4 or not page:
+                continue
+            try:
+                page = int(page)
+                box = [float(x) for x in box]
+            except (TypeError, ValueError):
+                continue
+            bid = re.sub(r"[^A-Za-z0-9_-]+", "-", str(block.get("id") or "figure")).strip("-") or "figure"
+            rel = crop(root, page, box, bid)
+            block["src"] = rel
+            generated[str(block.get("id"))] = rel
+        if generated:
+            write_json_atomic(paper_path, paper)
+        return generated
 
 
 def _extend_captioned(blocks: list[dict], layout: dict):

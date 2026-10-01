@@ -6,7 +6,57 @@
   let pvPage = 1, pvBlock = null;
   const pages = () => (S.paper.meta || {}).pages || [];
 
-  /* 右侧面板开关：pages | notes | null */
+  /* 右侧面板宽度：桌面端可拖动，离线版和服务版都记在当前浏览器。 */
+  const SIDE_KEY = "easyread-reader-side-w";
+  const root = document.documentElement;
+  const sidePanels = () => PR.$$(".side-panel");
+  function clampSideWidth(w) {
+    const max = Math.max(420, Math.min(760, innerWidth - 320));
+    return Math.max(360, Math.min(max, Number(w) || Math.min(innerWidth * .44, 720)));
+  }
+  function setSideWidth(w, save) {
+    const width = clampSideWidth(w);
+    root.style.setProperty("--reader-side-w", width + "px");
+    if (save) PR.ls.set(SIDE_KEY, Math.round(width));
+    return width;
+  }
+  function initSideWidth() {
+    const saved = PR.ls.get(SIDE_KEY, null);
+    setSideWidth(saved || Math.min(innerWidth * .44, 720), false);
+  }
+  initSideWidth();
+  sidePanels().forEach((panel) => {
+    const grip = PR.$("[data-side-grip]", panel);
+    if (!grip) return;
+    grip.addEventListener("pointerdown", (e) => {
+      if (innerWidth <= 760) return;
+      e.preventDefault();
+      const startX = e.clientX, startW = panel.getBoundingClientRect().width;
+      document.body.classList.add("reader-resizing");
+      grip.setPointerCapture?.(e.pointerId);
+      const move = (ev) => setSideWidth(startW + startX - ev.clientX, false);
+      const stop = () => {
+        grip.releasePointerCapture?.(e.pointerId);
+        grip.removeEventListener("pointermove", move);
+        grip.removeEventListener("pointerup", stop);
+        grip.removeEventListener("pointercancel", stop);
+        document.body.classList.remove("reader-resizing");
+        setSideWidth(parseFloat(getComputedStyle(panel).width), true);
+      };
+      grip.addEventListener("pointermove", move);
+      grip.addEventListener("pointerup", stop);
+      grip.addEventListener("pointercancel", stop);
+    });
+    grip.addEventListener("keydown", (e) => {
+      const current = panel.getBoundingClientRect().width;
+      if (e.key === "ArrowLeft") { e.preventDefault(); setSideWidth(current + 16, true); }
+      if (e.key === "ArrowRight") { e.preventDefault(); setSideWidth(current - 16, true); }
+      if (e.key === "Home") { e.preventDefault(); setSideWidth(Math.min(innerWidth * .44, 720), true); }
+    });
+  });
+  window.addEventListener("resize", () => setSideWidth(parseFloat(getComputedStyle(root).getPropertyValue("--reader-side-w")), false));
+
+  /* 右侧面板开关：pages | notes | chat | deepread | null */
   /* 面板先滑出来（只动面板，不卡），滑完再让正文让位、重排一次。
      长论文有几万个节点，正文宽度一变就要整页重排（两三百毫秒），放在点击的当下会让人觉得按钮反应慢。 */
   PR.side = null;
@@ -16,7 +66,9 @@
     body.classList.toggle("pv-open", name === "pages");
     body.classList.toggle("np-open", name === "notes");
     body.classList.toggle("ch-open", name === "chat");
+    body.classList.toggle("dr-open", name === "deepread");
     PR.$('[data-act="chat"]').classList.toggle("on", name === "chat");
+    PR.$('[data-act="deepread"]').classList.toggle("on", name === "deepread");
     PR.$('[data-act="pages"]').classList.toggle("on", name === "pages");
     PR.$('[data-act="notes"]').classList.toggle("on", name === "notes");
     clearTimeout(sideT);

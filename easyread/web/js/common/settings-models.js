@@ -5,6 +5,7 @@
   const FALLBACK = { claude: { models: [{ id: "opus", name: "Opus", desc: "最强" }, { id: "sonnet", name: "Sonnet", desc: "快、省" }, { id: "haiku", name: "Haiku", desc: "最快最省" }] },
     codex: { default: "", models: [] } };
   const lists = (s) => (s.models || FALLBACK);
+  const EFFORTS = [["", "不启用"], ["low", "低"], ["medium", "中"], ["high", "高"], ["xhigh", "超高"], ["max", "最大"]];
 
   /* 下拉框的选项：[[value, label]]。withDefault：最前面加一项“跟随 CLI 默认” */
   PR.cliModelOptions = function (s, engine, value, withDefault) {
@@ -23,6 +24,13 @@
   };
   PR.cliModelSelect = (s, engine, value, attrs, withDefault) =>
     "<select class=\"input\" " + attrs + ">" + PR.opt(PR.cliModelOptions(s, engine, value, withDefault), value) + "</select>";
+  PR.cliModelInput = function (s, engine, value, attrs) {
+    const id = "cli-models-" + engine;
+    const opts = PR.cliModelOptions(s, engine, value, false).map(([v]) => v).filter(Boolean);
+    return "<input class=\"input\" " + attrs + " list=\"" + id + "\" value=\"" + PR.esc(value || "") + "\" placeholder=\"可手填模型名\"><datalist id=\"" + id + "\">" +
+      opts.map((v) => "<option value=\"" + PR.esc(v) + "\">").join("") + "</datalist>";
+  };
+  PR.reasoningSelect = (value, attrs) => "<select class=\"input\" " + (attrs || "") + ">" + PR.opt(EFFORTS, value || "") + "</select>";
   /* 选中项的说明：Codex 把 /model 里那句介绍也显示出来 */
   PR.cliModelDesc = function (s, engine, value) {
     if (engine !== "codex") return "";

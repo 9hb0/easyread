@@ -140,6 +140,9 @@
     if (document.fonts) document.fonts.ready.then(() => { PR.fitWide(); PR.layoutMargin(); });
     new ResizeObserver(PR.debounce(() => PR.layoutMargin(), 80)).observe(PR.$("#paper"));
     PR.startPolling();
+    if (new URLSearchParams(location.search).get("deepread") === "1" && PR.store.mode === "server") {
+      setTimeout(() => PR.toggleDeepRead(true), 0);
+    }
 
     if (location.hash && document.getElementById(location.hash.slice(1))) {
       // 打开带 #段落 的链接：先跳过去，等字体、公式排好后再对一次中，免得排版变动把它挤偏

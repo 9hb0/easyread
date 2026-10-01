@@ -4,7 +4,7 @@
 (function (PR) {
   "use strict";
   const dlg = () => PR.$("#settingsDlg");
-  const ALL_TABS = [["engine", "翻译"], ["chat", "问 AI"], ["reading", "阅读"], ["library", "侧边栏"], ["keys", "快捷键"]];
+  const ALL_TABS = [["engine", "翻译"], ["chat", "问 AI"], ["deepread", "精读论文"], ["reading", "阅读"], ["library", "侧边栏"], ["keys", "快捷键"]];
   const tabs = () => ALL_TABS.filter(([k]) => PR.settingsTabs[k]);  // “侧边栏”页只在文献库页面有
   PR.settingsTabs = PR.settingsTabs || {};
   const st = (PR.settingsState = { tab: "engine", cfg: null, presets: [], groups: [], found: null, chat: null, ui: null });
@@ -15,7 +15,7 @@
     const [d, chat] = await Promise.all([PR.api("/api/config"), PR.api("/api/chat/models").catch(() => null)]);
     Object.assign(st, { tab: typeof tab === "string" ? tab : "engine", cfg: d.config, presets: d.presets, groups: d.groups || [], chat,
       apiKind: null, ui: { features: Object.assign({}, PR.features), keys_on: PR.keysOn, keys: Object.assign({}, PR.keymap) },
-      theme: PR.ls.get("easyread-prefs", {}).theme || "auto", recording: null, editing: null, form: null, chatKeys: null });
+      theme: PR.ls.get("easyread-prefs", {}).theme || "auto", recording: null, editing: null, form: null, chatKeys: null, apiModels: [] });
     render();
     dlg().classList.add("open");
     // 每次打开都问一次（后端有缓存，很快）：刚装好或更新了 Claude Code / Codex，版本号和模型名单马上跟上
@@ -91,12 +91,13 @@
   }
   function cliFields(name) {
     const c = st.cfg[name];
-    const model = PR.cliModelSelect(st, name, c.model, 'data-k="' + name + '.model"', true);  // 选项见 settings-models.js
+    const model = PR.cliModelInput(st, name, c.model, 'data-k="' + name + '.model"');
     const how = name === "claude"
       ? '还没装？<a href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank" rel="noopener">安装 Claude Code</a>，在终端里运行一次 <code>claude</code> 登录。翻译用的是你订阅里的额度。Opus / Sonnet 自动用 Claude Code 支持的最新版；要用刚出的新模型，先运行 <code>claude update</code>。'
       : (PR.cliModelDesc(st, "codex", c.model) ? PR.esc(PR.cliModelDesc(st, "codex", c.model)) + "<br>" : "") +
         '名单和 Codex 里 <code>/model</code> 看到的一样。还没装或要更新：<code>npm i -g @openai/codex@latest</code>，装好后运行一次 <code>codex</code> 登录。';
     return '<div class="grid2"><label class="field"><span>模型</span>' + model + "</label>" +
+      '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(c.reasoning_effort, 'data-k="' + name + '.reasoning_effort"') + "</label>" +
       '<label class="field"><span>命令</span><input class="input" data-k="' + name + '.command" value="' + PR.esc(c.command) + '"></label></div><p class="hint">' + how + "</p>";
   }
   /* 免费模型 = 本机开源模型 + 有免费额度的服务；付费 API 单独一张卡 */
@@ -107,8 +108,9 @@
     const kind = st.apiKind || PR.apiKind(st.presets, o.preset);
     const p = st.presets.find((x) => x.id === o.preset);
     const ollama = st.found && st.found.ollama;
-    let model = '<input class="input" data-k="openai.model" value="' + PR.esc(o.model) + '" list="modelList" placeholder="模型名"><datalist id="modelList">' +
-      ((p && p.models) || []).map((m) => '<option value="' + PR.esc(m) + '">').join("") + "</datalist>";
+    const modelChoices = (st.apiModels && st.apiModels.length ? st.apiModels : (p && p.models) || []);
+    let model = '<div style="display:flex;gap:6px"><input class="input" style="min-width:0" data-k="openai.model" value="' + PR.esc(o.model) + '" list="modelList" placeholder="模型名"><button class="btn sm line" data-refresh-models="translation" title="从中转站读取模型">刷新模型</button></div><datalist id="modelList">' +
+      modelChoices.map((m) => '<option value="' + PR.esc(m) + '">').join("") + "</datalist>";
     if (o.preset === "ollama" && ollama && ollama.models.length) {
       model = '<select class="input" data-k="openai.model">' + PR.opt(ollama.models.map((m) => [m, m]).concat(ollama.models.includes(o.model) || !o.model ? [] : [[o.model, o.model + "（没下载）"]]), o.model) + "</select>";
     }
@@ -123,6 +125,7 @@
       '<div class="grid2"><label class="field"><span>接口地址（base URL）</span><input class="input" data-k="openai.base_url" value="' + PR.esc(o.base_url) + '" placeholder="https://…/v1"></label>' +
       '<label class="field"><span>模型</span>' + model + "</label></div>" +
       (p && !p.key ? "" : '<label class="field"><span>API Key' + (o.has_key ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" data-k="openai.api_key" value="' + PR.esc(o.api_key) + '" placeholder="sk-…" autocomplete="off"></label>') +
+      '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(o.reasoning_effort, 'data-k="openai.reasoning_effort"') + "</label>" +
       '<label class="check" style="margin:0 0 10px"><input type="checkbox" data-k="openai.vision"' + (o.vision ? " checked" : "") + ">模型能看图（把原页图一起发过去，公式和表格更准）</label>" +
       '<p class="hint">Key 只存在本机的 config.json 里，只发给你填的这个地址。这里存的 Key，“问 AI”用同一家服务时也能直接用。</p>';
   }
@@ -145,8 +148,10 @@
     if (state.tab !== "engine") {  // 不在这一页时，用切页时存下的值
       const c = state.cfg, o = c.openai;
       return { engine: c.engine, batch_pages: c.batch_pages, concurrency: c.concurrency, auto_translate: c.auto_translate,
-        claude: { model: c.claude.model, command: c.claude.command }, codex: { model: c.codex.model, command: c.codex.command },
-        openai: { preset: o.preset, base_url: o.base_url, model: o.model, api_key: o.api_key, vision: o.vision } };
+        claude: { model: c.claude.model, command: c.claude.command, reasoning_effort: c.claude.reasoning_effort },
+        codex: { model: c.codex.model, command: c.codex.command, reasoning_effort: c.codex.reasoning_effort },
+        openai: { preset: o.preset, base_url: o.base_url, model: o.model, api_key: o.api_key, reasoning_effort: o.reasoning_effort, vision: o.vision },
+        deepread: { model: (c.deepread || {}).model || "", prompt: (c.deepread || {}).prompt || "" } };
     }
     const patch ={ engine: state.cfg.engine, claude: {}, codex: {}, openai: { preset: state.cfg.openai.preset } };
     PR.$$("[data-k]", dlg()).forEach((el) => {
@@ -205,6 +210,18 @@
           const r = await PR.api("/api/config/test", { method: "POST", body: { engine: s.cfg.engine } });
           res.className = "test-result " + (r.ok ? "ok" : "bad"); res.textContent = (r.ok ? "✓ " : "✗ ") + r.message;
         } catch (err) { res.className = "test-result bad"; res.textContent = err.message; }
+      }
+      const refresh = e.target.closest('[data-refresh-models="translation"]');
+      if (refresh) {
+        this.sync(s);
+        refresh.disabled = true;
+        try {
+          const r = await PR.api("/api/models", { method: "POST", body: { scope: "translation", base_url: s.cfg.openai.base_url, api_key: s.cfg.openai.api_key } });
+          s.apiModels = r.models || [];
+          PR.toast("已读取 " + s.apiModels.length + " 个模型");
+        } catch (err) { PR.toast("读取模型失败：" + PR.esc(err.message)); }
+        refresh.disabled = false;
+        return true;
       }
       return false;
     },

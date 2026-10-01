@@ -93,6 +93,15 @@ class TranslateTest(unittest.TestCase):
         entries = self.ws.load("discussion").get("entries", [])
         self.assertEqual([(e["kind"], e["anchor"]) for e in entries], [("check", "tab1")])
 
+    def test_figures_are_materialized_from_located_boxes(self):
+        self.ws.update("paper", lambda p: p.__setitem__("blocks", [{"id": "fig1", "type": "figure", "page": 2, "src": ""}]))
+        write_json_atomic(self.ws.root / "layout.json", {"fig1": {"page": 2, "box": [0.1, 0.2, 0.9, 0.7]}})
+        with mock.patch.object(translate.pdfwork, "crop", return_value="figures/fig1.webp") as crop:
+            result = translate.pdfwork.materialize_figures(self.ws.root)
+        self.assertEqual(result, {"fig1": "figures/fig1.webp"})
+        self.assertEqual(self.ws.load("paper")["blocks"][0]["src"], "figures/fig1.webp")
+        crop.assert_called_once_with(self.ws.root, 2, [0.1, 0.2, 0.9, 0.7], "fig1")
+
     def test_json_with_code_fence_inside_string(self):
         # 附录里的代码块原样放进译文：输出里有 ``` 围栏套着 JSON，JSON 字符串里又有 ```python
         text = '```json\n{"blocks": [{"id": "c1", "type": "para", "zh": "代码如下：\\n```python\\nloss = -F.logsigmoid(x)\\n```"}]}\n```'

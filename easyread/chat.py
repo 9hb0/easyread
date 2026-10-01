@@ -159,6 +159,8 @@ def _stream_claude(c: dict, text: str, cwd: Path, cancel, on_model=None) -> Iter
             "--allowedTools", "Read", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]
     if c.get("model"):
         args += ["--model", c["model"]]
+    if c.get("reasoning_effort"):
+        args += ["--effort", c["reasoning_effort"]]
     proc = engines._popen(args, cwd)
     proc.stdin.write(text)
     proc.stdin.close()
@@ -196,21 +198,33 @@ def _stream_claude(c: dict, text: str, cwd: Path, cancel, on_model=None) -> Iter
 
 
 def _stream_openai(o: dict, text: str, cancel) -> Iterator[str]:
-    base = (o.get("base_url") or "").rstrip("/")
+    base = engines.openai_base(o.get("base_url") or "")
     if not base or not o.get("model"):
         raise engines.EngineError("API 没填地址或模型")
     body = {"model": o["model"], "temperature": 0.4, "stream": True, "messages": [{"role": "user", "content": text}]}
+    if o.get("reasoning_effort"):
+        body["reasoning_effort"] = o["reasoning_effort"]
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
     if o.get("api_key"):
         headers["Authorization"] = "Bearer " + o["api_key"]
-    req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
-    try:
-        r = urllib.request.urlopen(req, timeout=int(o.get("timeout") or 600))
-    except urllib.error.HTTPError as e:
-        raise engines.EngineError(f"接口返回 {e.code}：{e.read()[:300].decode('utf-8', 'replace')}")
-    except Exception as e:  # noqa: BLE001
-        raise engines.EngineError(f"连不上接口：{e}")
+    r = None
+    for attempt in range(2):
+        req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
+        try:
+            r = urllib.request.urlopen(req, timeout=int(o.get("timeout") or 600))
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read()[:300].decode("utf-8", "replace")
+            # 少数 OpenAI 中转站会把 reasoning_effort 转成它们不认识的
+            # summary 字段；去掉推理参数重试一次，避免整段回答直接失败。
+            if attempt == 0 and body.get("reasoning_effort") and e.code == 400 and "unknown field" in detail and "summary" in detail:
+                body.pop("reasoning_effort", None)
+                continue
+            raise engines.EngineError(f"接口返回 {e.code}：{detail}")
+        except Exception as e:  # noqa: BLE001
+            raise engines.EngineError(f"连不上接口：{e}")
     thinking = False
+    got = False
     with r:
         for raw in r:
             if cancel.is_set():
@@ -220,7 +234,7 @@ def _stream_openai(o: dict, text: str, cancel) -> Iterator[str]:
                 continue
             data = line[5:].strip()
             if data == "[DONE]":
-                return
+                break
             try:
                 delta = (json.loads(data).get("choices") or [{}])[0].get("delta") or {}
             except json.JSONDecodeError:
@@ -234,4 +248,7 @@ def _stream_openai(o: dict, text: str, cancel) -> Iterator[str]:
                     continue
                 thinking, piece = False, piece.split("</think>", 1)[1]
             if piece:
+                got = True
                 yield piece
+    if not got:
+        raise engines.EngineError("接口没有返回回答内容，请检查 BASE_URL、模型名，或中转站是否支持流式输出")

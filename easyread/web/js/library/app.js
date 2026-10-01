@@ -13,7 +13,7 @@
   PR.$("#sort").value = L.sort;
 
   L.byId = (id) => L.items.find((i) => i.id === id);
-  L.openReader = (id) => { location.href = "/read/" + id; };
+  L.openReader = (id, deepread) => { location.href = "/read/" + id + (deepread ? "?deepread=1" : ""); };
   L.patch = async function (id, fields) {
     const it = L.byId(id);
     if (it) { Object.assign(it, fields.meta_override ? {} : fields); L.render(); }  // 先改界面，再存盘
