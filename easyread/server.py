@@ -311,6 +311,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"threads": chat_store.threads(ws)})
             if action == "chat":
                 return self._chat(ws, body)
+            if action == "discuss" and len(parts) > 5 and parts[5] == "delete":  # 删页边的某条 AI 讨论
+                did = str(body.get("id", "")).strip()
+                if not did:
+                    raise ValueError("id 不能为空")
+                n = paperdata.delete_discussion(ws, did)
+                return self._json(200, {"deleted": n, "versions": ws.versions()})
             if action == "deepread":
                 return self._json(200, app.jobs.submit_deepread(ws, config.load()))
             if action == "ops":

@@ -40,7 +40,8 @@
         (d.quote ? '<div class="quote">「' + PR.md(d.quote, { cite: false, xref: false }) + "」</div>" : "") +
         (d.title ? '<div class="ttl">' + PR.md(d.title, { xref: false }) + "</div>" : "") +
         (d.q ? '<div class="q">' + PR.md(d.q) + "</div>" : "") +
-        '<div class="body">' + PR.mdBlocks(d.body) + "</div></div>";
+        '<div class="body">' + PR.mdBlocks(d.body) + "</div>" +
+        (PR.store.mode === "server" ? '<div class="acts"><button data-a="del">删除</button></div>' : "") + "</div>";
     }
     const answered = PR.repliesTo(d.id).length > 0;
     const asking = PR.asking.has(d.id);
@@ -185,6 +186,25 @@
     }
   }, 600);
 
+  /* 删页边的 AI 讨论：discussion.json 是翻译方的文件，走接口写；只删这条，不动“问 AI”里的原对话 */
+  PR.deleteDiscussion = async function (id, at, inPanel) {
+    const e = (S.discussion.entries || []).find((x) => x.id === id);
+    if (!e) return;
+    if (!(await PR.confirm({ title: "删除这条页边讨论？", body: "「" + (KIND_LABEL[e.kind] || "AI 讨论") + "」会从页边和批注列表里去掉，不影响“问 AI”里的原对话。", ok: "删除", danger: true, at }))) return;
+    try {
+      const res = await PR.api("/api/p/" + PR.pid + "/discuss/delete", { method: "POST", body: { id } });
+      S.versions = Object.assign(S.versions, res.versions || {});
+    } catch (err) {
+      PR.toast("删除失败：" + PR.esc(err.message));
+      return;
+    }
+    S.discussion.entries = (S.discussion.entries || []).filter((x) => x.id !== id);
+    PR.renderMargin();
+    PR.applyMarks();
+    inPanel && PR.renderNotesPanel();
+    PR.toast("已删除");
+  };
+
   /* 笔记卡片上的“让 AI 回答 / 点评 / 追问”：在右侧“问 AI”面板里实时回答，答案同时成为这条笔记的回复 */
   PR.askModel = function (nid) {
     const n = noteById(nid);
@@ -227,6 +247,7 @@
     const nid = card.dataset.note;
     const rerender = () => (inPanel ? PR.renderNotesPanel(nid) : PR.openNoteEditor(nid));
     if (a && a.dataset.a === "more") { expanded.add(card.dataset.card || nid); card.classList.remove("clamp"); a.remove(); PR.layoutMargin(); return true; }
+    if (!nid && card.dataset.card && a && a.dataset.a === "del") { PR.deleteDiscussion(card.dataset.card, card, inPanel); return true; }
     if (nid && a) {
       const n = noteById(nid);
       if (a.dataset.a === "edit") inPanel ? PR.renderNotesPanel(nid) : PR.openNoteEditor(nid);
