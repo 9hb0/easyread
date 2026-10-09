@@ -116,8 +116,9 @@
     }
     const saved = o.saved_keys || [];
     const tile = (x) => '<button data-preset="' + x.id + '" class="' + (o.preset === x.id ? "on" : "") + '">' + PR.esc(x.name) + (saved.includes(x.id) ? ' <span class="ok-dot" title="已存 Key"></span>' : "") + "</button>";
+    const customTile = (label) => '<button data-preset="" class="' + (!o.preset ? "on" : "") + '">' + label + "</button>";
     const tiles = st.groups.filter(([g]) => (API_KIND[g] || "free") === kind).map(([g, label]) => '<div class="preset-group"><span>' + PR.esc(label) + "</span>" + st.presets.filter((x) => x.group === g).map(tile).join("") +
-      (g === "local" ? '<button data-preset="" class="' + (!o.preset ? "on" : "") + '">自定义地址</button>' : "") + "</div>").join("");
+      (g === "local" ? customTile("自定义地址") : g === "paid" ? customTile("自定义提供商") : "") + "</div>").join("");
     let note = p && p.note ? PR.esc(p.note) : "";
     if (o.preset === "ollama" && st.found) note = (ollama && ollama.running ? "Ollama 在运行，已下载 " + ollama.models.length + " 个模型。" : '<span class="bad">没检测到 Ollama（127.0.0.1:11434）。</span>') + note;
     return '<div class="preset-tiles grouped">' + tiles + "</div>" +
@@ -138,7 +139,7 @@
       o.base_url = p.base_url;
       const om = s.found && s.found.ollama && s.found.ollama.models;
       o.model = p.id === "ollama" && om && om.length && !om.includes(p.model) ? om[0] : p.model;
-      o.vision = ["gemini", "openai", "anthropic"].includes(p.id);
+      o.vision = ["gemini", "openai", "anthropic", "ark-agent", "opencode-go"].includes(p.id);
     }
     const saved = (o.saved_keys || []).includes(o.preset);  // 每家的 Key 分开存，换回来不用重填
     o.api_key = saved ? "••••" : ""; o.has_key = saved;
