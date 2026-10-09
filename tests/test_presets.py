@@ -33,6 +33,14 @@ class PresetTest(unittest.TestCase):
         settings = Path("easyread/web/js/common/settings.js").read_text(encoding="utf-8")
         self.assertIn('"opencode-go"', settings)
 
+    def test_opencode_zen_pay_as_you_go_is_paid_preset(self):
+        by_id = {p["id"]: p for p in PRESETS}
+        preset = by_id["opencode"]
+        self.assertEqual(preset["group"], "paid")
+        self.assertEqual(preset["base_url"], "https://opencode.ai/zen/v1")
+        self.assertTrue(preset["key"])
+        self.assertIn(preset["model"], preset["models"])
+
 
 if __name__ == "__main__":
     unittest.main()
