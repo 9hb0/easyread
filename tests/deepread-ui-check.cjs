@@ -14,6 +14,7 @@ function check(condition, message) {
 
 check(readerHtml.includes('id="deepreadpanel"') && readerHtml.includes('data-act="deepread"'), "reader deepread panel/action is missing");
 check(readerJs.includes("PR.toggleDeepRead") && readerJs.includes('data-dr="generate"'), "reader deepread controls are missing");
+check(readerJs.includes('data-dr="wiki"') && readerJs.includes("/wikiingest"), "deepread panel lacks wiki ingest controls");
 check(readerJs.includes("/deepread") && !readerJs.includes("toggleDeepRead();"), "deepread must not auto-trigger on load");
 check(panels.includes('act === "deepread"'), "reader toolbar does not open deepread");
 check(detail.includes("deepread") && detail.includes("生成精读"), "library menu lacks deepread action");

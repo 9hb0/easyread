@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 
-from . import config, deepread, translate
+from . import config, deepread, obsidian, translate
 from .engines import Cancelled, EngineError
 from .library import Library
 from .log import log
@@ -154,6 +154,7 @@ class Jobs:
                 elif job["kind"] == "deepread":
                     deepread.set_state(ws, state="running", message="模型思考中", error="")
                     deepread.generate(ws, cfg, None)
+                    obsidian.auto_sync(ws, cfg)
                 job["state"], job["message"] = "done", "完成"
             except Exception as e:  # noqa: BLE001
                 job["state"], job["message"] = "error", str(e)[:500]

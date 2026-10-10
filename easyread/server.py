@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from . import __version__, chat, chat_models, chat_store, cli_models, config, deepread, detect, engines, paperdata, pdfwork, prefs
+from . import __version__, chat, chat_models, chat_store, cli_models, config, deepread, detect, engines, obsidian, paperdata, pdfwork, prefs, wiki_ingest
 from .log import log, setup as setup_log, tail
 from .jobs import Jobs
 from .library import Library
@@ -175,6 +175,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"text": tail(config.LOG_PATH, 200), "path": str(config.LOG_PATH)})
         if path == "/api/jobs":
             return self._json(200, {"jobs": app.jobs.small_status(parse_qs(url.query).get("pid", [None])[0])})
+        if path == "/api/obsidian":
+            return self._json(200, {"vaults": obsidian.find_vaults()})
         if path.startswith("/api/p/"):
             parts = path.split("/")  # ['', 'api', 'p', id, action, name?]
             ws = lib.ws(parts[3]) if len(parts) > 4 else None
@@ -199,6 +201,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"threads": chat_store.threads(ws), **chat_models.listing(config.load())})
             if action == "deepread":
                 return self._json(200, deepread.read(ws))
+            if action == "wikiingest":
+                return self._json(200, wiki_ingest.read(ws))
             if action == "log":
                 return self._json(200, {"text": tail(ws.root / "job.log", 300)})
             if action == "export":
@@ -292,6 +296,15 @@ class Handler(BaseHTTPRequestHandler):
             if patch.get("engine"):
                 cfg["engine"] = patch["engine"]
             return self._json(200, engines.test(cfg))
+        if path == "/api/obsidian/sync":
+            body = json.loads(self._body() or b"{}")
+            cfg = config.load()
+            vault = str(body.get("vault") or "").strip()
+            if not (vault or obsidian.settings(cfg)["vault"]):
+                return self._json(200, {"configured": False, "results": [], "total": 0})
+            res = obsidian.sync_all(cfg, body.get("id"), vault or None, str(body.get("folder") or "").strip() or None)
+            res["configured"] = True
+            return self._json(200, res)
 
         if path.startswith("/api/p/"):
             parts = path.split("/")
@@ -319,6 +332,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"deleted": n, "versions": ws.versions()})
             if action == "deepread":
                 return self._json(200, app.jobs.submit_deepread(ws, config.load()))
+            if action == "wikiingest":
+                if len(parts) > 5 and parts[5] == "cancel":
+                    return self._json(200, wiki_ingest.cancel(ws))
+                return self._json(200, wiki_ingest.start(ws, config.load()))
             if action == "ops":
                 ops = body.get("ops") or []
                 if not isinstance(ops, list):

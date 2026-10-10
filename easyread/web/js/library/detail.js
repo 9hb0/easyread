@@ -165,6 +165,15 @@
       "-",
       { label: "复制 BibTeX", icon: "copy", fn: () => copy(PR.cite(i, "bibtex"), " BibTeX") },
       { label: "导出离线 HTML（可发给别人）", icon: "download", fn: () => { PR.toast("正在打包…"); location.href = "/api/p/" + id + "/export"; } },
+      { label: "同步精读到 Obsidian", icon: "upload", fn: async () => {
+        try {
+          const r = await PR.api("/api/obsidian/sync", { method: "POST", body: { id } });
+          const one = (r.results || [])[0];
+          if (!r.configured) return PR.toast("先在设置的“精读论文”里填 Obsidian 库路径");
+          if (!one) return PR.toast("这篇还没有精读文档");
+          PR.toast(one.status === "error" || one.status === "skipped" ? (one.message || "没有同步") : "已同步到 " + (one.file || "Obsidian"));
+        } catch (e) { PR.toast("同步失败：" + PR.esc(e.message)); }
+      } },
       { label: "打开所在文件夹", icon: "folder", fn: () => PR.api("/api/p/" + id + "/reveal", { method: "POST", body: {} }).catch((e) => PR.toast(PR.esc(e.message))) },
       { label: "全部重新翻译", icon: "redo", fn: () => retranslateAll(i) },
       { label: "翻译记录", icon: "log", fn: async () => { const r = await PR.api("/api/p/" + id + "/log"); PR.showText("翻译记录", r.text); } },

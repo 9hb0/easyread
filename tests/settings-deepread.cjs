@@ -15,5 +15,6 @@ check(settings.includes('"deepread"'), "settings must register the deepread tab"
 check(settings.includes("deepread: { model:") && settings.includes("prompt:"), "settings save must include deepread fields");
 check(tab.includes("deepread ="), "deepread settings tab is missing");
 check(tab.includes('data-k="deepread.model"') && tab.includes('data-k="deepread.prompt"'), "deepread model and prompt controls are missing");
+check(tab.includes('data-k="wiki.vault"') && settings.includes("wiki: { vault:"), "wiki vault setting is missing from save");
 check(library.includes("settings-deepread.js") && reader.includes("settings-deepread.js"), "both pages must load deepread settings");
 console.log("settings deepread checks passed");

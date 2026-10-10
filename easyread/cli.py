@@ -10,6 +10,7 @@
   easyread check ID                       检查块、引用、TeX
   easyread locate ID                      重新计算原页高亮位置
   easyread export ID                      导出单文件离线 HTML
+  easyread obsidian [ID] [--vault 库路径] [--folder 文件夹] [--classify]  精读同步到 Obsidian 库（--classify 自动归类）
   easyread demo ID --out docs/demo        做成网站上的在线演示（图片另存、带问 AI 记录）
   easyread merge ID --from 导出.json       把离线版页面导出的修改并回文献库
   easyread migrate 旧的“xxx-共读”目录      把旧版技能生成的目录搬进文献库
@@ -183,6 +184,17 @@ def cmd_export(a):
     out(str(build(find(a.id))))
 
 
+def cmd_obsidian(a):
+    from . import obsidian
+    cfg = config.load()
+    res = obsidian.sync_all(cfg, a.id, a.vault, a.folder, classify=a.classify)
+    for r in res["results"]:
+        out(f"{r['id']}  {r['status']}  {r.get('message') or r.get('file') or ''}")
+    out(f"共 {res['total']} 篇：写入 {res['written']}，未变 {res['unchanged']}，跳过 {res['skipped']}，出错 {res['error']}")
+    if not (a.vault or (cfg.get("obsidian") or {}).get("vault")):
+        out("还没设置 Obsidian 库路径：--vault 库路径，或在设置的“精读论文”里填")
+
+
 def cmd_demo(a):
     from .site import build_demo
     out(str(build_demo(find(a.id), Path(a.out), credit=a.credit or "")))
@@ -214,6 +226,7 @@ def main(argv=None):
     p = sub.add_parser("translate"); p.add_argument("id"); p.add_argument("--pages"); p.set_defaults(fn=cmd_translate)
     for name, fn in (("status", cmd_status), ("check", cmd_check), ("locate", cmd_locate), ("export", cmd_export)):
         p = sub.add_parser(name); p.add_argument("id"); p.set_defaults(fn=fn)
+    p = sub.add_parser("obsidian"); p.add_argument("id", nargs="?"); p.add_argument("--vault"); p.add_argument("--folder"); p.add_argument("--classify", action="store_true"); p.set_defaults(fn=cmd_obsidian)
     p = sub.add_parser("blocks"); p.add_argument("id"); p.add_argument("--from", dest="from_file", required=True)
     p.add_argument("--done"); p.add_argument("--replace", action="store_true"); p.set_defaults(fn=cmd_blocks)
     p = sub.add_parser("discuss"); p.add_argument("id"); p.add_argument("--from", dest="from_file"); p.add_argument("--delete")

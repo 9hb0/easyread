@@ -36,6 +36,12 @@ DEFAULTS = {
     # 阅读页右侧“问 AI”的模型名单和默认模型，见 chat_models.py
     "chat": copy.deepcopy(DEFAULT_CHAT),
     "deepread": {"model": "", "prompt": DEFAULT_PROMPT},
+    # 精读文档同步到 Obsidian 库：vault 是库路径，folder 是库里的文件夹，auto 是生成后自动同步，
+    # classify 是让模型按库里带编号的主题文件夹（00_、01_…）自动归类
+    "obsidian": {"vault": "", "folder": "EasyRead 精读", "auto": True, "classify": False},
+    # 论文入库：vault 指向带 automation/paper-ingest 入库流程的知识库根目录（比如 D:\Agent\wiki\3D&4D），
+    # 精读面板的“入知识库”会把精读文档和原论文 PDF 交给该流程处理
+    "wiki": {"vault": ""},
 }
 
 def _merge(base: dict, over: dict) -> dict:

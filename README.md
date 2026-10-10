@@ -24,6 +24,7 @@
 - **翻译和解释分开。** 正文只放忠实的译文；AI 的解释、回答放在页边，一眼就能分清哪句是论文说的。
 - **边读边问 AI。** 右侧“问 AI”面板实时对话，回答逐字流出来；可以一次引用好几段（选中文字拖进输入框就行）。问“我标红的那些公式有什么联系”，它会按颜色找出你的划线。可以开多个对话，模型单独选：Claude、GPT（Codex）、DeepSeek、通义、本机 Ollama……好的回答一键放到页边。
 - **边读边批注。** 选中文字四色荧光笔或下划线、写笔记、提问；问题一键让 AI 回答，笔记可以让 AI 点评。所有笔记按原文顺序汇总，可以勾选导出成 Markdown（放进 Obsidian、Notion）。
+- **精读文档直接进 Obsidian。** 一键生成整篇中文精读；设置里填 Obsidian 库路径（能自动检测本机的库），精读生成后自动同步进知识库：公式转成 $…$，按论文标题命名，带作者、年份、出处属性。内容变了自动更新，改标题会清掉旧文件，不会覆盖库里同名的笔记。库按主题建了编号文件夹（00_、01_…）的话，还能让模型自动挑一个归进去。
 - **译文可以改。** 双击一段直接改；术语表里改一个译法，全文替换。
 - **不只是 arXiv。** 拖进任何 PDF；或者填 arXiv 编号、DOI、论文标题、论文网页（OpenReview、ACL、NeurIPS、bioRxiv、PMC、期刊页面），自动找到公开的 PDF 并补全作者、年份、出处。
 - **文献库。** 侧栏像聊天软件：论文和分类都能置顶；自己建分类（右键改名、删除，把论文拖进去），内置分类可以隐藏；最近阅读、搜索、未读 / 在读 / 已读、星标、阅读进度、复制引用（GB/T 7714、APA、BibTeX）、导出单文件离线 HTML 发给别人。快捷键可以自定义。
@@ -41,7 +42,7 @@
 | **Codex CLI** | 装好并登录 [Codex](https://github.com/openai/codex) | 不用 Key，用 ChatGPT 账号 |
 | **免费模型**：Ollama / LM Studio | 本机装 [Ollama](https://ollama.com) 或 [LM Studio](https://lmstudio.ai) | 完全离线、免费，推荐 qwen3:8b / 14b |
 | **免费模型**：智谱 GLM-4.5-Flash / 硅基流动 / 魔搭 / Groq / Cerebras / GitHub Models / Gemini / OpenRouter | API Key（免费注册） | 开源模型（Qwen3、GLM、Llama、DeepSeek）免费调用或有免费额度 |
-| **付费 API**：DeepSeek / 通义千问 / Kimi / OpenAI / Anthropic | API Key | 一篇 20 页论文通常几毛钱到几块钱 |
+| **付费 API**：DeepSeek / 通义千问 / Kimi / MiniMax / OpenAI / Anthropic | API Key | 一篇 20 页论文通常几毛钱到几块钱 |
 
 不想让它导入后马上翻译，在设置里关掉“导入后自动开始翻译”就行，之后可以让对话里的 agent 来译。
 

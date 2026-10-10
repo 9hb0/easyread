@@ -12,10 +12,10 @@
   PR.opt = (list, val) => list.map(([v, l]) => '<option value="' + PR.esc(v) + '"' + (String(v) === String(val) ? " selected" : "") + ">" + PR.esc(l) + "</option>").join("");
 
   PR.openSettings = async function (tab) {
-    const [d, chat] = await Promise.all([PR.api("/api/config"), PR.api("/api/chat/models").catch(() => null)]);
+    const [d, chat, ob] = await Promise.all([PR.api("/api/config"), PR.api("/api/chat/models").catch(() => null), PR.api("/api/obsidian").catch(() => null)]);
     Object.assign(st, { tab: typeof tab === "string" ? tab : "engine", cfg: d.config, presets: d.presets, groups: d.groups || [], chat,
       apiKind: null, ui: { features: Object.assign({}, PR.features), keys_on: PR.keysOn, keys: Object.assign({}, PR.keymap) },
-      theme: PR.ls.get("easyread-prefs", {}).theme || "auto", recording: null, editing: null, form: null, chatKeys: null, apiModels: [] });
+      theme: PR.ls.get("easyread-prefs", {}).theme || "auto", recording: null, editing: null, form: null, chatKeys: null, apiModels: [], vaults: (ob && ob.vaults) || [] });
     render();
     dlg().classList.add("open");
     // 每次打开都问一次（后端有缓存，很快）：刚装好或更新了 Claude Code / Codex，版本号和模型名单马上跟上
@@ -139,7 +139,7 @@
       o.base_url = p.base_url;
       const om = s.found && s.found.ollama && s.found.ollama.models;
       o.model = p.id === "ollama" && om && om.length && !om.includes(p.model) ? om[0] : p.model;
-      o.vision = ["gemini", "openai", "anthropic", "ark-agent", "opencode-go"].includes(p.id);
+      o.vision = ["gemini", "openai", "anthropic", "ark-agent", "opencode-go", "minimax"].includes(p.id);
     }
     const saved = (o.saved_keys || []).includes(o.preset);  // 每家的 Key 分开存，换回来不用重填
     o.api_key = saved ? "••••" : ""; o.has_key = saved;
@@ -152,9 +152,14 @@
         claude: { model: c.claude.model, command: c.claude.command, reasoning_effort: c.claude.reasoning_effort },
         codex: { model: c.codex.model, command: c.codex.command, reasoning_effort: c.codex.reasoning_effort },
         openai: { preset: o.preset, base_url: o.base_url, model: o.model, api_key: o.api_key, reasoning_effort: o.reasoning_effort, vision: o.vision },
-        deepread: { model: (c.deepread || {}).model || "", prompt: (c.deepread || {}).prompt || "" } };
+        deepread: { model: (c.deepread || {}).model || "", prompt: (c.deepread || {}).prompt || "" },
+        obsidian: { vault: (c.obsidian || {}).vault || "", folder: (c.obsidian || {}).folder || "EasyRead 精读", auto: (c.obsidian || {}).auto !== false, classify: (c.obsidian || {}).classify === true },
+        wiki: { vault: (c.wiki || {}).vault || "" } };
     }
-    const patch ={ engine: state.cfg.engine, claude: {}, codex: {}, openai: { preset: state.cfg.openai.preset } };
+    const patch ={ engine: state.cfg.engine, claude: {}, codex: {}, openai: { preset: state.cfg.openai.preset },
+      deepread: { model: (state.cfg.deepread || {}).model || "", prompt: (state.cfg.deepread || {}).prompt || "" },
+      obsidian: Object.assign({}, state.cfg.obsidian),
+      wiki: { vault: (state.cfg.wiki || {}).vault || "" } };
     PR.$$("[data-k]", dlg()).forEach((el) => {
       const [a, b] = el.dataset.k.split(".");
       const v = el.type === "checkbox" ? el.checked : el.value;
