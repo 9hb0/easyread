@@ -30,8 +30,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(preset["base_url"], "https://opencode.ai/zen/go/v1")
         self.assertTrue(preset["key"])
         self.assertIn(preset["model"], preset["models"])
-        settings = Path("easyread/web/js/common/settings.js").read_text(encoding="utf-8")
-        self.assertIn('"opencode-go"', settings)
+        self.assertTrue(preset["vision"])
 
     def test_opencode_zen_pay_as_you_go_is_paid_preset(self):
         by_id = {p["id"]: p for p in PRESETS}
@@ -40,6 +39,16 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(preset["base_url"], "https://opencode.ai/zen/v1")
         self.assertTrue(preset["key"])
         self.assertIn(preset["model"], preset["models"])
+
+    def test_minimax_is_paid_preset_with_vision(self):
+        by_id = {p["id"]: p for p in PRESETS}
+        preset = by_id["minimax"]
+        self.assertEqual(preset["group"], "paid")
+        self.assertEqual(preset["base_url"], "https://api.minimax.cn/v1")
+        self.assertTrue(preset["key"])
+        self.assertIn(preset["model"], preset["models"])
+        self.assertTrue(preset["key_url"])
+        self.assertTrue(preset["vision"])
 
 
 if __name__ == "__main__":

@@ -93,6 +93,15 @@ class Handler(BaseHTTPRequestHandler):
         past = (thread or {}).get("messages", [])
         convo = [{"role": x["role"], "content": x["content"]} for x in past] + [{"role": "user", "content": text}]
         prompt_text = chat.prompt(ws, convo, user["anchor"], user["quote"], ecfg["engine"], refs)
+        images: list[Path] = []
+        if ecfg["engine"] == "codex" or (ecfg["engine"] == "openai" and ecfg["openai"].get("vision")):
+            pages = chat.vision_pages(ws, user["anchor"], refs)
+            try:
+                images = [pdfwork.engine_image(ws.root, n) for n in pages]
+            except Exception:  # noqa: BLE001  没有 source.pdf 生成不了图，就照旧纯文字回答
+                images = []
+            if images:
+                prompt_text += f"\n\n（这条消息附了第 {'、'.join(map(str, pages))} 页的原页图，读者正指着这些页提问；公式、表格和图以原页为准。）"
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -111,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                 chat_models.remember(m.get("model", ""), actual)
                 if m.get("engine") == "claude":
                     send({"model": chat_models.label(m)})
-            for piece in chat.stream(ecfg, prompt_text, ws.root, cancel, seen):
+            for piece in chat.stream(ecfg, prompt_text, ws.root, cancel, seen, images):
                 pieces.append(piece)
                 send({"t": piece})
             msg = chat_store.append(ws, tid, user, "".join(pieces), m["id"], model)

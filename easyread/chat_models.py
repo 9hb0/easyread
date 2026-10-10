@@ -90,7 +90,7 @@ def engine_cfg(cfg: dict, mid: str | None) -> tuple[dict, dict]:
         out[m["engine"]]["reasoning_effort"] = m.get("reasoning_effort") or ""
     elif m["engine"] == "openai":
         p = next((x for x in PRESETS if x["id"] == m.get("preset")), None)
-        out["openai"] = {**out["openai"], "preset": m.get("preset") or "", "vision": False,
+        out["openai"] = {**out["openai"], "preset": m.get("preset") or "", "vision": bool(m.get("vision")),
                          "base_url": m.get("base_url") or (p["base_url"] if p else out["openai"].get("base_url", "")),
                          "model": m.get("model") or (p["model"] if p else ""),
                          "api_key": m.get("api_key") or _key(cfg, m.get("preset") or ""),
@@ -132,7 +132,7 @@ def listing(cfg: dict) -> dict:
                     "detail": (actual_of(m.get("model", "")) or m.get("model")) if e == "claude"
                     else m.get("model") or ((codex_default_model() + "（跟随 Codex 默认）") if e == "codex" and codex_default_model() else "")})
     default = (cfg.get("chat") or {}).get("default") or (out[0]["id"] if out else "")
-    return {"models": out, "default": default, "presets": [{"id": p["id"], "name": p["name"], "models": p.get("models", [])} for p in PRESETS]}
+    return {"models": out, "default": default, "presets": [{"id": p["id"], "name": p["name"], "models": p.get("models", []), "vision": bool(p.get("vision"))} for p in PRESETS]}
 
 
 def sanitize(items: list[dict], previous: list[dict] | None = None) -> list[dict]:
@@ -153,5 +153,5 @@ def sanitize(items: list[dict], previous: list[dict] | None = None) -> list[dict
         out.append({"id": mid, "name": str(m.get("name") or m.get("model") or "模型")[:40], "engine": e,
                     "model": str(m.get("model") or "")[:120], "preset": str(m.get("preset") or ""),
                     "base_url": str(m.get("base_url") or "")[:300], "api_key": str(key or "")[:500],
-                    "reasoning_effort": str(m.get("reasoning_effort") or "")[:20]})
+                    "reasoning_effort": str(m.get("reasoning_effort") or "")[:20], "vision": bool(m.get("vision"))})
     return out or copy.deepcopy(DEFAULT_MODELS)

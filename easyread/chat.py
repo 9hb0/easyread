@@ -5,10 +5,11 @@
 - 上下文：论文标题、摘要、读者指着的段落和前后几段、读者引用的几处原文、术语表。
   读者的标记（按颜色分好的划线、笔记、问题）只在问题提到“标红的”“划线”“笔记”时才带上，
   提到具体颜色就只带那种颜色，所以可以问“我标红的那些公式之间有什么联系”。
-  Claude Code 还能自己 Read paper.json、reader.json 看全文和全部标记。
+  Claude Code 还能自己 Read paper.json、reader.json 看全文和全部标记；能看图的模型（设置里勾“模型能看图”）和 Codex 还会收到读者正在读的那几页原页图。
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import threading
@@ -24,6 +25,7 @@ from .store import Workspace
 HISTORY = 12  # 带上最近几轮对话
 COLOR_NAMES = {"yellow": "黄", "green": "绿", "blue": "蓝", "pink": "红"}
 MARKS_BUDGET = 9000  # 标记部分最多带多少字
+VISION_PAGES = 4  # 问 AI 带图时最多附几页原页
 
 
 # ---------- 提示词 ----------
@@ -122,11 +124,19 @@ def _marks_summary(ws: Workspace) -> str:
     return "读者在论文上做过 " + str(len(notes)) + " 处标记（" + "、".join(f"{k} {v}" for k, v in counts.items()) + "），这次问题没提到，就没附上。"
 
 
+def vision_pages(ws: Workspace, anchor: str | None, refs: list[dict] | None = None) -> list[int]:
+    """读者指着 / 引用到的块在哪几页：问 AI 带图时把这些页的原页图发过去。"""
+    ids = {anchor} | {r.get("anchor") for r in (refs or []) if r.get("anchor")}
+    pages = sorted({b.get("page") for b in ws.load("paper").get("blocks", []) if b.get("id") in ids and b.get("page")})
+    return pages[:VISION_PAGES]
+
+
 def prompt(ws: Workspace, messages: list[dict], anchor: str | None, quote: str, engine: str, refs: list[dict] | None = None) -> str:
     history = messages[-HISTORY:]
     convo = "\n\n".join(("读者" if m["role"] == "user" else "你") + "：" + m["content"] for m in history[:-1])
     ask = history[-1]["content"] if history else ""
-    tool = ("需要看全文时，用 Read 工具读当前目录的 paper.json（blocks 里是译文和原文）；读者的全部标记在 reader.json 的 notes 里。\n"
+    tool = ("需要看全文时，用 Read 工具读当前目录的 paper.json（blocks 里是译文和原文）；读者的全部标记在 reader.json 的 notes 里；"
+            "要看图表、公式或原版式时，原页图按页码放在 extract/ 下（第 3 页是 page-003.jpg），可以用 Read 打开。\n"
             if engine == "claude" else "")
     want, colors = wants_marks(ask)
     marks = _marks(ws, colors) if want else _marks_summary(ws)
@@ -140,15 +150,15 @@ def prompt(ws: Workspace, messages: list[dict], anchor: str | None, quote: str, 
 
 
 # ---------- 流式输出 ----------
-def stream(ecfg: dict, text: str, cwd: Path, cancel: threading.Event, on_model=None) -> Iterator[str]:
+def stream(ecfg: dict, text: str, cwd: Path, cancel: threading.Event, on_model=None, images: list[Path] | None = None) -> Iterator[str]:
     """on_model(实际模型名)：Claude Code 开头会报它实际用的模型。"""
     e = ecfg.get("engine")
     if e == "claude":
         yield from _stream_claude(ecfg["claude"], text, cwd, cancel, on_model)
     elif e == "openai":
-        yield from _stream_openai(ecfg["openai"], text, cancel)
+        yield from _stream_openai(ecfg["openai"], text, cancel, images or [])
     else:  # codex 没有逐字输出，整段给
-        yield engines.run(ecfg, text, cwd, None, cancel)
+        yield engines.run(ecfg, text, cwd, images, cancel)
 
 
 def _stream_claude(c: dict, text: str, cwd: Path, cancel, on_model=None) -> Iterator[str]:
@@ -197,11 +207,16 @@ def _stream_claude(c: dict, text: str, cwd: Path, cancel, on_model=None) -> Iter
         cancel.set()  # 让 killer 线程退出
 
 
-def _stream_openai(o: dict, text: str, cancel) -> Iterator[str]:
+def _stream_openai(o: dict, text: str, cancel, images: list[Path] | None = None) -> Iterator[str]:
     base = engines.openai_base(o.get("base_url") or "")
     if not base or not o.get("model"):
         raise engines.EngineError("API 没填地址或模型")
-    body = {"model": o["model"], "temperature": 0.4, "stream": True, "messages": [{"role": "user", "content": text}]}
+    content: str | list = text
+    if o.get("vision") and images:
+        content = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(p.read_bytes()).decode()}}
+            for p in images]
+    body = {"model": o["model"], "temperature": 0.4, "stream": True, "messages": [{"role": "user", "content": content}]}
     if o.get("reasoning_effort"):
         body["reasoning_effort"] = o["reasoning_effort"]
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}

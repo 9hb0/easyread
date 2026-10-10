@@ -33,13 +33,14 @@
     if (f.kind === "claude" || f.kind === "codex") {
       h += '<label class="field"><span>模型</span>' + PR.cliModelInput(s, f.kind, f.model, 'id="cmModel"') + "</label>" +
         '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label>" +
-        '<p class="hint">' + (f.kind === "claude" ? "Opus / Sonnet 自动用 Claude Code 支持的最新版；新模型出来后运行 <code>claude update</code>。"
-          : (PR.cliModelDesc(s, "codex", f.model) ? PR.esc(PR.cliModelDesc(s, "codex", f.model)) + "<br>" : "") + "名单和 Codex 里 <code>/model</code> 看到的一样。") + "</p>";
+        '<p class="hint">' + (f.kind === "claude" ? "Opus / Sonnet 自动用 Claude Code 支持的最新版；新模型出来后运行 <code>claude update</code>。回答时能自己读全文和原页图。"
+          : (PR.cliModelDesc(s, "codex", f.model) ? PR.esc(PR.cliModelDesc(s, "codex", f.model)) + "<br>" : "") + "名单和 Codex 里 <code>/model</code> 看到的一样。提问时自动附上读者正在读的那页原图。") + "</p>";
     } else if (f.kind === "custom") {
       h += '<label class="field"><span>BASE_URL</span><input class="input" id="cmBaseUrl" value="' + PR.esc(f.base_url) + '" placeholder="https://中转站/v1"></label>' +
         '<div class="grid2"><label class="field"><span>模型</span><div style="display:flex;gap:6px"><input class="input" style="min-width:0" id="cmModel" list="cmModels" value="' + PR.esc(f.model) + '" placeholder="模型名"><button class="btn sm line" data-cm="refresh-models" title="从中转站读取模型">刷新</button></div><datalist id="cmModels">' + (f.models || []).map((x) => '<option value="' + PR.esc(x) + '">').join("") + "</datalist></label>" +
         '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label></div>" +
-        '<label class="field"><span>API Key' + (f.hasKey ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key) + '" placeholder="sk-…" autocomplete="off"></label>';
+        '<label class="field"><span>API Key' + (f.hasKey ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key) + '" placeholder="sk-…" autocomplete="off"></label>' +
+        '<label class="check"><input type="checkbox" id="cmVision"' + (f.vision ? " checked" : "") + ">模型能看图（把你正在读的那几页原页图一起发过去，公式和图表更准）</label>";
     } else {
       const groups = s.groups.filter(([g]) => (KIND_OF[g] || "free") === f.kind);
       h += '<div class="preset-tiles grouped">' + groups.map(([g, label]) => '<div class="preset-group"><span>' + PR.esc(label) + "</span>" +
@@ -51,7 +52,8 @@
           '<div class="grid2"><label class="field"><span>模型</span><div style="display:flex;gap:6px"><input class="input" style="min-width:0" id="cmModel" list="cmSugg" value="' + PR.esc(f.model) + '"><button class="btn sm line" data-cm="refresh-models" title="从中转站读取模型">刷新</button></div><datalist id="cmSugg">' +
           (p.models || []).map((x) => '<option value="' + PR.esc(x) + '">').join("") + "</datalist></label>" +
           (p.key ? '<label class="field"><span>API Key' + (hasKey(s, p.id) ? "（已保存，留空不改）" : "") + '</span><input class="input" type="password" id="cmKey" value="' + PR.esc(f.key || "") + '" placeholder="sk-…" autocomplete="off"></label>' : "<span></span>") + "</div>" +
-          '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label>";
+          '<label class="field"><span>推理强度</span>' + PR.reasoningSelect(f.reasoning_effort, 'id="cmEffort"') + "</label>" +
+          '<label class="check"><input type="checkbox" id="cmVision"' + (f.vision ? " checked" : "") + ">模型能看图（把你正在读的那几页原页图一起发过去，公式和图表更准）</label>";
       }
     }
     return h + '<label class="field"><span>显示的名字（可不填）</span><input class="input" id="cmName" value="' + PR.esc(f.name) + '" placeholder="' + PR.esc(autoName(s, f)) + '"></label>' +
@@ -77,10 +79,11 @@
     if (v("cmName") !== null) f.name = v("cmName");
     if (v("cmKey") !== null) f.key = v("cmKey");
     if (v("cmEffort") !== null) f.reasoning_effort = v("cmEffort");
+    const vis = PR.$("#cmVision"); if (vis) f.vision = vis.checked;
   }
   function startForm(s, m) {
-    s.form = m ? { id: m.id, kind: kindOf(s, m), model: m.model || "", preset: m.preset || "", base_url: m.base_url || "", name: m.name === m.label || m.name === "GPT" ? "" : m.name || "", key: "", hasKey: !!m.has_key, reasoning_effort: m.reasoning_effort || "", models: [] }
-      : { id: "", kind: "claude", model: "opus", preset: "", base_url: "", name: "", key: "", hasKey: false, reasoning_effort: "", models: [] };
+    s.form = m ? { id: m.id, kind: kindOf(s, m), model: m.model || "", preset: m.preset || "", base_url: m.base_url || "", name: m.name === m.label || m.name === "GPT" ? "" : m.name || "", key: "", hasKey: !!m.has_key, reasoning_effort: m.reasoning_effort || "", vision: !!m.vision, models: [] }
+      : { id: "", kind: "claude", model: "opus", preset: "", base_url: "", name: "", key: "", hasKey: false, reasoning_effort: "", vision: false, models: [] };
   }
 
   T.chat = {
@@ -88,7 +91,7 @@
       if (!s.chat) return '<p class="hint">读不到模型名单。</p>';
       return '<p class="set-lead">阅读页右侧“问 AI”可以选的模型。点一张卡片，设为新对话默认用的；读的时候在对话框左下角随时换。</p>' +
         cardsHtml(s) + (s.editing ? formHtml(s) : "") +
-        '<p class="hint" style="margin-top:14px">每次提问会带上：你正在读的段落、你引用的几段、摘要和术语表。问到“标红的”“划线”“我的笔记”时，才会找出对应颜色的标记一起发过去。</p>';
+        '<p class="hint" style="margin-top:14px">每次提问会带上：你正在读的段落、你引用的几段、摘要和术语表。问到“标红的”“划线”“我的笔记”时，才会找出对应颜色的标记一起发过去。勾了“模型能看图”的 API 模型还会收到你正在读的那几页原页图；Claude Code 自己会读原页，Codex 每次自动附图。</p>';
     },
     sync(s) { readForm(s); },
     change(e, s) {
@@ -101,7 +104,7 @@
         readForm(s);
         const f = s.form, kind = k.dataset.cmk;
         if (kind === f.kind) return false;
-        Object.assign(f, { kind, model: kind === "claude" ? "opus" : "", preset: kind === "custom" ? "" : f.preset, base_url: kind === "custom" ? "" : f.base_url, name: "", key: "", hasKey: false, reasoning_effort: "", models: [] });
+        Object.assign(f, { kind, model: kind === "claude" ? "opus" : "", preset: kind === "custom" ? "" : f.preset, base_url: kind === "custom" ? "" : f.base_url, name: "", key: "", hasKey: false, reasoning_effort: "", vision: false, models: [] });
         if (isApi(kind)) {
           if (kind !== "custom") {
             const ol = s.found && s.found.ollama && s.found.ollama.running;
@@ -113,7 +116,7 @@
         return true;
       }
       const pb = e.target.closest("[data-cmp]");
-      if (pb && s.form) { readForm(s); const p = s.presets.find((x) => x.id === pb.dataset.cmp) || {}; Object.assign(s.form, { preset: pb.dataset.cmp, base_url: p.base_url || "", model: p.model || "", key: "", name: "", hasKey: hasKey(s, pb.dataset.cmp), models: [] }); return true; }
+      if (pb && s.form) { readForm(s); const p = s.presets.find((x) => x.id === pb.dataset.cmp) || {}; Object.assign(s.form, { preset: pb.dataset.cmp, base_url: p.base_url || "", model: p.model || "", key: "", name: "", hasKey: hasKey(s, pb.dataset.cmp), vision: !!p.vision, models: [] }); return true; }
       const b = e.target.closest("[data-cm]");
       if (!b) return false;
       const i = +b.dataset.i, list = s.chat.models, act = b.dataset.cm;
@@ -157,7 +160,7 @@
         if (api && p && p.key && !hasKey(s, f.preset) && !f.key) { PR.toast("这家要填 API Key"); return false; }
         if (api && f.key) (s.chatKeys = s.chatKeys || {})[f.preset] = f.key;
         const name = f.name || autoName(s, f);
-        const m = { engine: api ? "openai" : f.kind, preset: api && f.kind !== "custom" ? f.preset : "", base_url: api && f.kind === "custom" ? f.base_url : "", api_key: api ? (f.key || (f.hasKey ? "••••" : "")) : "", model: f.model, reasoning_effort: f.reasoning_effort || "", name, label: name,
+        const m = { engine: api ? "openai" : f.kind, preset: api && f.kind !== "custom" ? f.preset : "", base_url: api && f.kind === "custom" ? f.base_url : "", api_key: api ? (f.key || (f.hasKey ? "••••" : "")) : "", model: f.model, reasoning_effort: f.reasoning_effort || "", vision: api ? !!f.vision : false, name, label: name,
           source: api ? (f.kind === "custom" ? "自定义中转站" : p ? p.name : "API") : f.kind === "claude" ? "Claude Code" : "Codex CLI", detail: f.model || "跟随 Codex 默认", ready: true };
         if (s.editing === "new") list.push(Object.assign(m, { id: "m" + Date.now().toString(36) }));
         else Object.assign(list.find((x) => x.id === s.editing), m);

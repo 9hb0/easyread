@@ -139,7 +139,7 @@
       o.base_url = p.base_url;
       const om = s.found && s.found.ollama && s.found.ollama.models;
       o.model = p.id === "ollama" && om && om.length && !om.includes(p.model) ? om[0] : p.model;
-      o.vision = ["gemini", "openai", "anthropic", "ark-agent", "opencode-go", "minimax"].includes(p.id);
+      o.vision = !!p.vision;
     }
     const saved = (o.saved_keys || []).includes(o.preset);  // 每家的 Key 分开存，换回来不用重填
     o.api_key = saved ? "••••" : ""; o.has_key = saved;
