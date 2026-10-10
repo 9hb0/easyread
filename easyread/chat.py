@@ -2,7 +2,7 @@
 
 - 用哪个模型：chat_models.py（设置里的一张短名单）。
 - 对话记录：chat_store.py（每篇论文可以有多个对话）。
-- 上下文：论文标题、摘要、读者指着的段落和前后几段、读者引用的几处原文、术语表。
+- 上下文：整篇论文的原文（含未翻译页面）、参考文献、读者指着的段落和前后几段、术语表。
   读者的标记（按颜色分好的划线、笔记、问题）只在问题提到“标红的”“划线”“笔记”时才带上，
   提到具体颜色就只带那种颜色，所以可以问“我标红的那些公式之间有什么联系”。
   Claude Code 还能自己 Read paper.json、reader.json 看全文和全部标记；能看图的模型（设置里勾“模型能看图”）和 Codex 还会收到读者正在读的那几页原页图。
@@ -29,6 +29,58 @@ VISION_PAGES = 4  # 问 AI 带图时最多附几页原页
 
 
 # ---------- 提示词 ----------
+def _source_text(block: dict) -> str:
+    """用保存的原文 / 译文补齐抽取遗漏，保留列表、公式和表格数值。"""
+    kind = block.get("type")
+    if kind == "note":
+        return "阅读批注（非原文）：" + (block.get("zh") or "")
+    if kind == "list":
+        return "\n".join("- " + (item.get("en") or item.get("zh") or "") for item in block.get("items", []))
+    if kind == "math":
+        return f"公式 {block.get('tag') or ''}：$${block.get('tex') or block.get('en') or ''}$$"
+    if kind in ("table", "figure"):
+        parts = [block.get("caption_en") or block.get("caption_zh") or ""]
+        if kind == "table":
+            head = block.get("head") or []
+            if head and not isinstance(head[0], list):
+                head = [head]
+            parts += [" | ".join(str(cell) for cell in row) for row in [*head, *(block.get("rows") or [])]]
+        return "\n".join(part for part in parts if part)
+    text = block.get("en") or block.get("zh") or ""
+    if kind == "heading":
+        text = f"{block.get('num') or ''} {text}"
+    return text.strip()
+
+
+def _paper_context(ws: Workspace, paper: dict) -> str:
+    """所有引擎都直接收到论文文本；原页文本优先，避免只翻译正文时漏掉文末引用。"""
+    pages: dict[int, str] = {}
+    for path in (ws.root / "extract").glob("page-*.txt"):
+        match = re.fullmatch(r"page-(\d+)\.txt", path.name)
+        if match:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                pages[int(match.group(1))] = text
+    compact_pages = {page: "".join(text.split()) for page, text in pages.items()}
+    supplemental: dict[int, list[str]] = {}
+    for block in paper.get("blocks") or []:
+        page = int(block.get("page") or 0)
+        text = _source_text(block)
+        if text and "".join(text.split()) not in compact_pages.get(page, ""):
+            supplemental.setdefault(page, []).append(text)
+    parts = []
+    for page in sorted(pages.keys() | supplemental.keys()):
+        label = f"第 {page} 页" if page else "未标页码的论文内容"
+        if page in pages:
+            parts.append(f"原文{label}（抽取文本，公式和表格可能排乱）：\n{pages[page]}")
+        if page in supplemental:
+            parts.append(f"{label}（保存内容补充）：\n" + "\n\n".join(supplemental[page]))
+    references = [f"[{ref.get('id', '')}] {ref['text']}" for ref in paper.get("references") or [] if ref.get("text")]
+    if references:
+        parts.append("参考文献列表（编号与正文引用对应）：\n" + "\n".join(references))
+    return "已载入的论文材料（按页排列，当前选中的段落只是提问重点）：\n\n" + "\n\n".join(parts) if parts else ""
+
+
 def _context(ws: Workspace, anchor: str | None, quote: str, refs: list[dict] | None = None) -> str:
     paper = ws.load("paper")
     meta = paper.get("meta", {})
@@ -60,6 +112,9 @@ def _context(ws: Workspace, anchor: str | None, quote: str, refs: list[dict] | N
     gl = paper.get("glossary", [])
     if gl:
         lines.append("术语表：" + "；".join(f"{g['en']} = {g['zh']}" for g in gl[:80]))
+    full = _paper_context(ws, paper)
+    if full:
+        lines.append(full)
     return "\n\n".join(lines)
 
 
@@ -135,13 +190,16 @@ def prompt(ws: Workspace, messages: list[dict], anchor: str | None, quote: str, 
     history = messages[-HISTORY:]
     convo = "\n\n".join(("读者" if m["role"] == "user" else "你") + "：" + m["content"] for m in history[:-1])
     ask = history[-1]["content"] if history else ""
-    tool = ("需要看全文时，用 Read 工具读当前目录的 paper.json（blocks 里是译文和原文）；读者的全部标记在 reader.json 的 notes 里；"
+    tool = ("需要进一步核对时，用 Read 工具读当前目录的 paper.json（blocks 里是译文和原文，references 是参考文献）；"
+            "未翻译页面的原文在 extract/page-*.txt；读者的全部标记在 reader.json 的 notes 里；"
             "要看图表、公式或原版式时，原页图按页码放在 extract/ 下（第 3 页是 page-003.jpg），可以用 Read 打开。\n"
             if engine == "claude" else "")
     want, colors = wants_marks(ask)
     marks = _marks(ws, colors) if want else _marks_summary(ws)
     return ("你在陪读者读一篇学术论文，回答他边读边冒出来的问题。用中文，直接、具体，能举例就举例；"
             "区分“论文里写了什么”和“你的补充解释”，论文里没有的内容不要说成是论文说的。"
+            "下面的论文材料来自整篇论文，不限于当前页；问到其他章节、附录或引用编号时，先查这些材料和参考文献列表。"
+            "之前的回答若说只能看到当前页，以本次附上的材料为准；材料确实缺失时再说明缺少什么。"
             "行内公式写 $TeX$，行间公式写 $$TeX$$。提到原文位置时说“式 5”“第 4 页那段”，不要写 [p4-5] 这类内部编号。只输出回答本身，不要客套，不要重复问题。\n" + tool + "\n"
             + _context(ws, anchor, quote, refs)
             + ("\n\n" + marks if marks else "")

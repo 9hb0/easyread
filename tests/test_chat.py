@@ -1,12 +1,15 @@
 """“问 AI”的流式输出：用一个本机假的 OpenAI 兼容接口测，包括推理模型的 <think> 被去掉。  python -m unittest tests.test_chat"""
 import json
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from easyread import chat, chat_models
+from easyread.store import Workspace, write_json_atomic
 
-PIECES = ["<think>先想", "一想</think>", "标准误差", "除以 $\sqrt{n}$", "。"]
+PIECES = ["<think>先想", "一想</think>", "标准误差", r"除以 $\sqrt{n}$", "。"]
 
 
 class FakeAPI(BaseHTTPRequestHandler):
@@ -27,6 +30,129 @@ class FakeAPI(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
 
 
+class ChatContextTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.ws = Workspace(self.root)
+        self.blocks = [
+            {"id": f"p{n}", "type": "para", "page": n, "en": f"Original section {n}.", "zh": f"第 {n} 页译文"}
+            for n in range(1, 11)
+        ]
+        self.paper = {"meta": {"title_en": "Context test", "page_count": 10}, "blocks": self.blocks,
+                      "references": [{"id": "75", "text": "Smith. A cited method. https://example.org/method"}]}
+        self.save_paper()
+
+    def save_paper(self):
+        write_json_atomic(self.root / "paper.json", self.paper)
+
+    def ask(self, engine="openai", anchor="p5"):
+        return chat.prompt(self.ws, [{"role": "user", "content": "参考文献 [75] 讲了什么？"}], anchor, "", engine)
+
+    def test_other_sections_and_reference_entries_reach_every_engine(self):
+        for engine in ("openai", "claude", "codex"):
+            for anchor in ("p5", None):
+                with self.subTest(engine=engine, anchor=anchor):
+                    text = self.ask(engine, anchor)
+                    self.assertIn("Original section 1.", text)
+                    self.assertIn("Original section 10.", text)
+                    self.assertIn("[75] Smith. A cited method. https://example.org/method", text)
+
+    def test_untranslated_text_including_references_on_a_translated_page(self):
+        self.paper["blocks"] = self.blocks[:5]
+        self.paper["references"] = []
+        self.save_paper()
+        extract = self.root / "extract"
+        extract.mkdir()
+        (extract / "page-005.txt").write_text("Section 5. References\n[80] Jones. Untranslated citation.", encoding="utf-8")
+        (extract / "page-010.txt").write_text("Appendix proof on the last page.", encoding="utf-8")
+        text = self.ask()
+        self.assertIn("[80] Jones. Untranslated citation.", text)
+        self.assertIn("Appendix proof on the last page.", text)
+        self.assertIn("Original section 1.", text)
+        self.assertIn("第 10 页", text)
+
+    def test_block_fallback_preserves_lists_math_and_table_values(self):
+        self.paper["blocks"] += [
+            {"id": "l10", "type": "list", "page": 10, "items": [{"en": "An English-only list item."}]},
+            {"id": "eq10", "type": "math", "page": 10, "tex": "E=mc^2", "tag": "8"},
+            {"id": "t10", "type": "table", "page": 10, "caption_en": "Full results", "head": [["Method", "Score"]], "rows": [["Baseline", "73.5"]]},
+            {"id": "f10", "type": "figure", "page": 10, "caption_en": "Overview of the method."},
+            {"id": "zh10", "type": "para", "page": 10, "zh": "只有译文的附录内容"},
+        ]
+        self.save_paper()
+        text = self.ask()
+        for value in ("An English-only list item.", "E=mc^2", "Full results", "Baseline", "73.5", "Overview of the method.", "只有译文的附录内容"):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_empty_extracted_page_falls_back_to_blocks(self):
+        extract = self.root / "extract"
+        extract.mkdir()
+        (extract / "page-010.txt").write_text(" \n", encoding="utf-8")
+        self.assertIn("Original section 10.", self.ask())
+
+    def test_partial_extracted_page_keeps_saved_body_math_and_table(self):
+        self.paper["blocks"] += [
+            {"id": "eq10", "type": "math", "page": 10, "tex": "E=mc^2"},
+            {"id": "t10", "type": "table", "page": 10, "rows": [["Baseline", "73.5"]]},
+        ]
+        self.save_paper()
+        extract = self.root / "extract"
+        extract.mkdir()
+        (extract / "page-010.txt").write_text("Conference header only.", encoding="utf-8")
+        text = self.ask(anchor="p1")
+        for value in ("Conference header only.", "Original section 10.", "E=mc^2", "Baseline", "73.5"):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+    def test_inline_reading_notes_keep_their_non_paper_identity(self):
+        self.paper["blocks"].append({"id": "note10", "type": "note", "page": 10, "zh": "这是阅读者自己的推测。"})
+        self.save_paper()
+        text = self.ask(anchor="p1")
+        self.assertIn("阅读批注（非原文）：这是阅读者自己的推测。", text)
+
+    def test_chat_http_request_sends_other_pages_and_references_to_api(self):
+        import urllib.request
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from easyread.library import Library
+        from easyread.server import Handler
+
+        extract = self.root / "extract"
+        extract.mkdir()
+        (extract / "page-010.txt").write_text("Appendix proof.\n[80] Jones. Another cited method.", encoding="utf-8")
+        api = ThreadingHTTPServer(("127.0.0.1", 0), FakeAPI)
+        threading.Thread(target=api.serve_forever, daemon=True).start()
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        cfg = {"openai": {}, "chat": {"default": "fake", "models": [{
+            "id": "fake", "name": "Test API", "engine": "openai", "model": "fake",
+            "base_url": f"http://127.0.0.1:{api.server_address[1]}/v1",
+        }]}}
+        app = SimpleNamespace(lib=Library(self.root.parent), token="test-token")
+        with patch.object(Handler, "app", app, create=True), patch("easyread.server.config.load", return_value=cfg):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/p/{self.root.name}/chat",
+                    data=json.dumps({"text": "Explain citations [75] and [80].", "anchor": "p5"}).encode(),
+                    headers={"Content-Type": "application/json", "X-Token": "test-token"}, method="POST")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    events = [json.loads(line) for line in response]
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertTrue(events[-1].get("done"), events)
+        text = api.bodies[0]["messages"][0]["content"]
+        for value in ("Original section 1.", "Original section 5.", "Appendix proof.",
+                      "[75] Smith. A cited method. https://example.org/method", "[80] Jones. Another cited method."):
+            with self.subTest(value=value):
+                self.assertIn(value, text)
+
+
 class ChatStreamTest(unittest.TestCase):
     def test_openai_stream_strips_think(self):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeAPI)
@@ -36,7 +162,8 @@ class ChatStreamTest(unittest.TestCase):
             out = "".join(chat.stream(cfg, "问题", None, threading.Event()))
         finally:
             srv.shutdown()
-        self.assertEqual(out, "标准误差除以 $\sqrt{n}$。")
+            srv.server_close()
+        self.assertEqual(out, r"标准误差除以 $\sqrt{n}$。")
 
     def test_model_list_picks_preset_key(self):
         cfg = {"engine": "claude", "claude": {"model": ""}, "codex": {"model": ""},
@@ -86,8 +213,9 @@ class ChatStreamTest(unittest.TestCase):
             body = srv.bodies[-1]
         finally:
             srv.shutdown()
+            srv.server_close()
             shutil.rmtree(imgdir, ignore_errors=True)
-        self.assertEqual(out, "标准误差除以 $\sqrt{n}$。")
+        self.assertEqual(out, r"标准误差除以 $\sqrt{n}$。")
         content = body["messages"][0]["content"]
         self.assertEqual(content[0], {"type": "text", "text": "问题"})
         self.assertEqual(content[1]["type"], "image_url")
@@ -106,6 +234,7 @@ class ChatStreamTest(unittest.TestCase):
             body = srv.bodies[-1]
         finally:
             srv.shutdown()
+            srv.server_close()
             shutil.rmtree(imgdir, ignore_errors=True)
         self.assertEqual(body["messages"][0]["content"], "问题")
 
