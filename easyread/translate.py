@@ -20,7 +20,7 @@ from .store import Workspace, now_iso
 
 _merge_lock = threading.Lock()  # 并发翻译时，并入 paper.json 和重算原页定位一次只做一个
 # 用量到顶、余额不足这类错误，后面的批次也一定失败：直接停，剩下的页记为没译，等额度恢复后一键重试
-_QUOTA = re.compile(r"session limit|usage limit|rate limit reached|insufficient_quota|余额不足|额度|接口返回 40[12]", re.I)
+_QUOTA = re.compile(r"session limit|usage limit|rate limit reached|insufficient_quota|insufficient balance|余额不足|额度|接口返回 40[12]", re.I)
 _REF_LINE = re.compile(r"^\s*(\d+\.?\s*)?(references|bibliography|参考文献)\s*$", re.I | re.M)
 
 
@@ -187,8 +187,13 @@ def _call(ws, cfg, prompt, images, cancel, kind, pages):
 
 
 def _translation_pages(data, source, batch):
-    """Every input block must be translated or explicitly identified as page furniture."""
+    """Cover all body sources; a geometrically proven footer numeral is page furniture."""
     covered = {i for b in data["blocks"] for i in b.get("source_ids", [b["id"]])}
+    for b in source["blocks"]:
+        box = b.get("box")
+        if (b["en"].strip() == str(b["page"]) and box is not None
+                and .9 <= box[1] < box[3] <= 1 and .4 <= (box[0] + box[2]) / 2 <= .6):
+            covered.add(b["id"])
     allowed_skips = {"header", "footer", "page_number", "watermark"}
     for item in data.get("skipped_blocks") or []:
         if isinstance(item, dict) and item.get("reason") in allowed_skips:
@@ -212,6 +217,7 @@ def _reading_check(data, batch):
         problems.extend(found)
         if found:
             bad.add(block["page"])
+    highlight_errors = len(problems)
     annotations = reading.validate_annotations(data["blocks"])
     problems.extend(annotations)
     for problem in annotations:
@@ -225,7 +231,15 @@ def _reading_check(data, batch):
             bid = raw.get("block") if isinstance(raw, dict) else None
             hit = next((b for b in data["blocks"] if b["id"] == bid), None)
             bad.update([hit["page"]] if hit else batch)
+    data["_reading_validation"] = {"highlight_errors": highlight_errors,
+                                   "annotation_errors": len(annotations), "insight_errors": len(issues)}
     return problems, bad
+
+
+def _journal_reading_validation(ws, batch, data):
+    counts = data["_reading_validation"]
+    journal(ws, f"精读校验第 {batch} 页：高亮错误={counts['highlight_errors']}，"
+                f"批注错误={counts['annotation_errors']}，研究要点错误={counts['insight_errors']}")
 
 
 def _taken(ws: Workspace, batch: list[int]) -> set[str]:
@@ -294,6 +308,8 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
     original = copy.deepcopy(data)
     data["_raw_insights"] = copy.deepcopy(data.get("insights") or [])
     rp, bad = _reading_check(data, good) if reading_on else ([], set())
+    if reading_on:
+        _journal_reading_validation(ws, good, data)
     data.pop("_raw_insights", None)
     if not reading_on:
         data.pop("insights", None)
@@ -521,7 +537,15 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
     was_repair = prompt is not None
     prompt = prompt or prompts.enrich(ws, batch, targets)
     text = _call(ws, cfg, prompt, None, cancel, "reading_repair" if was_repair else "enrich", batch)
-    data = engines.parse_json(text)
+    try:
+        data = engines.parse_json(text)
+    except engines.EngineError as exc:
+        if not repair:
+            raise
+        journal(ws, f"补精读第 {batch} 页 JSON 解析失败，按固定译文修复一次")
+        return _one_enrich(ws, cfg, batch, cancel, snapshot=snapshot, tickets=tickets,
+                           versions=versions, prompt=prompts.repair_reading(ws, batch, targets, [str(exc)]),
+                           repair=False)
     items = data.get("blocks") if isinstance(data, dict) else data
     if not isinstance(items, list):
         raise engines.EngineError("补精读返回里没有 blocks")
@@ -535,6 +559,7 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
     package = {"blocks": clean, "insights": data.get("insights") if isinstance(data, dict) else [],
                "_raw_insights": data.get("insights") if isinstance(data, dict) else []}
     problems, bad = _reading_check(package, batch)
+    _journal_reading_validation(ws, batch, package)
     if len(known_items) != len(items):
         problems.append("精读结果引用未提供的文字块")
         bad.update(batch)

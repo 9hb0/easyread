@@ -79,6 +79,47 @@ class SourceBlocksTest(unittest.TestCase):
         self.assertEqual(self.ensure([1]), first)
         self.assertEqual(path.stat().st_mtime_ns, stamp)
 
+    def test_pdfium_blank_lines_and_discretionary_hyphen_keep_real_paragraphs(self):
+        text = "Heading\n\nFirst wrapped line\n\nunder\ufffeconstrained continuation.\n\nNext paragraph."
+        self.write_page(1, text, [
+            ["Heading", .1, .05, .4, .07],
+            ["First wrapped line", .1, .10, .8, .12],
+            ["under-constrained continuation.", .1, .13, .8, .15],
+            ["Next paragraph.", .1, .22, .7, .24]])
+        blocks = self.ensure([1])["blocks"]
+        self.assertEqual([b["en"] for b in blocks], [
+            "Heading", "First wrapped line\n\nunder\ufffeconstrained continuation.", "Next paragraph."])
+        self.assertEqual(blocks[1]["box"], [.1, .1, .8, .15])
+
+    def test_unknown_pdfium_character_is_not_matched_to_an_arbitrary_symbol(self):
+        self.write_page(1, "A\ufffeB", [["A+B", .1, .1, .8, .12]])
+        self.assertIsNone(self.ensure([1])["blocks"][0]["box"])
+
+    def test_multiline_extracted_body_does_not_absorb_a_separate_heading(self):
+        self.write_page(1, "Section heading\n\nBody line and wrapped text\ncontinued text.", [
+            ["Section heading", .1, .05, .4, .07],
+            ["Body line and wrapped text", .1, .09, .8, .13],
+            ["continued text.", .1, .133, .7, .153]])
+        self.assertEqual([b["en"] for b in self.ensure([1])["blocks"]], [
+            "Section heading", "Body line and wrapped text\ncontinued text."])
+
+    def test_bullet_hanging_continuation_stays_in_the_list_source(self):
+        self.write_page(1, "• First item.\n\n• Second item with wrapped\n\ncontinuation.\n\nNext paragraph.", [
+            ["• First item.", .13, .10, .8, .12],
+            ["• Second item with wrapped", .13, .13, .8, .15],
+            ["continuation.", .15, .153, .7, .173],
+            ["Next paragraph.", .1, .22, .8, .24]])
+        self.assertEqual([b["en"] for b in self.ensure([1])["blocks"]], [
+            "• First item.\n\n• Second item with wrapped\n\ncontinuation.", "Next paragraph."])
+
+    def test_list_does_not_absorb_text_from_another_column(self):
+        self.write_page(1, "- Left item.\n\nRight column paragraph.", [
+            ["- Left item.", .083, .11, .25, .125],
+            ["Right column paragraph.", .55, .128, .9, .143]])
+        blocks = self.ensure([1])["blocks"]
+        self.assertEqual([b["en"] for b in blocks], ["- Left item.", "Right column paragraph."])
+        self.assertEqual(blocks[0]["box"], [.083, .11, .25, .125])
+
     def test_changed_source_changes_only_its_page_version(self):
         self.write_page(1, "Old source.")
         self.write_page(2, "Stable source.")

@@ -14,21 +14,31 @@ fs.mkdirSync(out, { recursive: true });
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(url + '/read/' + pid);
     await page.waitForSelector('#paper .blk');
-    console.log('reading diagnostics', await page.evaluate(() => ({
-      reading: PR.state.paper.reading,
-      sources: PR.state.paper.translation.source_versions,
+    const diagnostics = await page.evaluate(() => ({
       valid: Object.keys(PR.state.paper.reading?.pages || {}).map(p => [p, PR.readingPageValid(p)]),
       saved: PR.state.paper.blocks.reduce((n, b) => n + (b.highlights?.length || 0), 0),
       rendered: document.querySelectorAll('mark.sem').length,
       filter: PR.readingFilter,
-    })), errors);
+    }));
+    console.log('reading diagnostics', diagnostics, errors);
     await page.waitForSelector('#paper mark.sem');
     assert.equal(await page.locator('.katex-error').count(), 0);
     const count = await page.locator('mark.sem').count();
-    await page.locator('mark.sem').first().scrollIntoViewIfNeeded();
+    const annotationMarkIndex = await page.evaluate(() => {
+      const marks = Array.from(document.querySelectorAll('mark.sem'));
+      for (const b of PR.state.paper.blocks) for (const a of PR.readingAnnotations(b)) {
+        const linked = PR.readingMarksForAnnotation(b.id, a.id);
+        if (linked.length) return marks.indexOf(linked[0]);
+      }
+      return -1;
+    });
+    const hasLinkedAnnotation = annotationMarkIndex >= 0;
+    const annotatedMark = page.locator('mark.sem').nth(hasLinkedAnnotation ? annotationMarkIndex : 0);
+    await annotatedMark.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(out, pid + '-light.png') });
-    await page.locator('mark.sem').first().click();
+    await annotatedMark.click();
     await page.waitForSelector('#popover.open');
+    if (hasLinkedAnnotation) await page.waitForSelector('#popover .rf-ann');
     await page.screenshot({ path: path.join(out, pid + '-annotation.png') });
     await page.keyboard.press('Escape');
     await page.locator('[data-act=guide]').click();
@@ -53,7 +63,7 @@ fs.mkdirSync(out, { recursive: true });
     await page.screenshot({ path: path.join(out, pid + '-mobile-dark.png') });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(out, pid + '-checks.json'), JSON.stringify({ pid, highlights: count, guide_entries: entries, errors, screenshots: 4 }, null, 2));
+    fs.writeFileSync(path.join(out, pid + '-checks.json'), JSON.stringify({ pid, diagnostics, highlights: count, guide_entries: entries, annotation_verified: hasLinkedAnnotation, errors, screenshots: 4 }, null, 2));
     console.log('REAL PAPER BROWSER PASS', pid, 'highlights', count, 'guide entries', entries);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

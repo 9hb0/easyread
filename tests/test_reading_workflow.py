@@ -64,6 +64,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(paper["translation"]["done_pages"], [1, 2])
         self.assertEqual(paper["reading"]["pages"]["1"]["status"], "failed")
         self.assertIn(1, reading.pages_needing_reading(paper))
+        self.assertIn("高亮错误=1，批注错误=0，研究要点错误=0",
+                      (self.ws.root / "job.log").read_text(encoding="utf-8"))
 
     def test_one_missing_page_does_not_discard_good_page(self):
         reply = self.result()
@@ -116,6 +118,16 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(list(failed), [1])
         self.assertEqual(self.ws.load("paper")["reading"]["pages"]["1"]["status"], "failed")
 
+    def test_insufficient_balance_stops_pending_enrich_calls_and_preserves_text(self):
+        merge_blocks(self.ws, self.result(), done=[1, 2])
+        original = copy.deepcopy(self.ws.load("paper")["blocks"])
+        with mock.patch.object(engines, "run", side_effect=engines.EngineError(
+                "Claude Code 出错：Failed to authenticate. API Error: 403 insufficient balance")) as run:
+            failed = translate.enrich_pages(self.ws, dict(self.cfg, batch_pages=1), [1, 2], None, lambda *a: None)
+        self.assertEqual(set(failed), {1, 2})
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.ws.load("paper")["blocks"], original)
+
     def test_enrich_cannot_overwrite_changed_translation(self):
         merge_blocks(self.ws, self.result(), done=[1, 2])
         def response(*a, **kw):
@@ -124,6 +136,33 @@ class WorkflowTest(unittest.TestCase):
         with mock.patch.object(engines, "run", response):
             translate.enrich_pages(self.ws, self.cfg, [1], None, lambda *a: None)
         self.assertNotIn("highlights", self.ws.load("paper")["blocks"][0])
+
+    def test_malformed_enrich_json_gets_one_frozen_reading_repair(self):
+        merge_blocks(self.ws, self.result(), done=[1, 2])
+        original = copy.deepcopy(self.ws.load("paper")["blocks"])
+        reply = {"blocks": [{"id": "p1-1", "zh": "不允许的改写",
+                             "highlights": [{"category": "method", "quote": "新方法"}]}]}
+        with mock.patch.object(engines, "run", side_effect=['{"blocks": [broken', json.dumps(reply)]):
+            failed = translate.enrich_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+        self.assertEqual(failed, {})
+        paper = self.ws.load("paper")
+        self.assertEqual(paper["blocks"][0]["zh"], original[0]["zh"])
+        self.assertEqual(paper["blocks"][1], original[1])
+        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "completed")
+        metrics = [json.loads(line) for line in (self.ws.root / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([r["kind"] for r in metrics], ["enrich", "reading_repair"])
+
+    def test_second_malformed_enrich_json_stays_failed_without_more_calls(self):
+        merge_blocks(self.ws, self.result(), done=[1, 2])
+        original = copy.deepcopy(self.ws.load("paper")["blocks"])
+        with mock.patch.object(engines, "run", side_effect=['{"blocks": [broken', 'still not JSON']):
+            failed = translate.enrich_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+        self.assertEqual(set(failed), {1})
+        paper = self.ws.load("paper")
+        self.assertEqual(paper["blocks"], original)
+        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "failed")
+        metrics = [json.loads(line) for line in (self.ws.root / "metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(metrics), 2)
 
     def test_formula_or_table_revision_invalidates_analysis(self):
         for field, before, after in (("tex", "x=1", "x=2"), ("rows", [["90%"]], [["95%"]])):

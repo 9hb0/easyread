@@ -56,12 +56,12 @@ def prepare():
     print("Prepared isolated copies:", sum(map(len, SAMPLES.values())), "pages", flush=True)
 
 
-def enrich():
+def enrich(force=False):
     cfg = dict(config.load(), reading_enabled=True, concurrency=3, batch_pages=2)
     result = {}
     for pid, selected in SAMPLES.items():
         ws = Workspace(OUT / "library" / pid)
-        pages = reading.pages_needing_reading(ws.load("paper"))
+        pages = selected if force else reading.pages_needing_reading(ws.load("paper"))
         started = time.monotonic()
         result[pid] = {"failed": translate.enrich_pages(ws, cfg, pages, threading.Event(),
                              lambda d, t, m: print(pid, m, flush=True)),
@@ -119,9 +119,12 @@ def ab():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["prepare", "enrich", "ab", "review"])
+    parser.add_argument("--all", action="store_true", help="enrich: recheck every selected sample page")
     args = parser.parse_args()
     if args.mode == "review":
         for pid in SAMPLES:
             review(Workspace(OUT / "library" / pid))
+    elif args.mode == "enrich":
+        enrich(force=args.all)
     else:
         globals()[args.mode]()

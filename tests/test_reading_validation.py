@@ -278,6 +278,33 @@ class ReadingStateAndGuideTest(unittest.TestCase):
         self.assertEqual(p["reading_guide"]["coverage"]["total"], 3)
         self.assertEqual(p["reading_guide"]["status"], "partial")
 
+    def test_guide_never_navigates_to_pages_outside_analyzed_coverage(self):
+        p = paper(total=3, done=(1, 2), target_pages=[1, 2], requested_scope="pages")
+        reading.apply_reading_state(p, [1], "completed", True)
+        reading.apply_reading_state(p, [2], "failed", True)
+        p["reading"]["insights"] = [insight("i-ok", "p1-1", 1), insight("i-gone", "p2-1", 2)]
+        reading.rebuild_guide(p)
+        guide = p["reading_guide"]
+        self.assertEqual(guide["methods"], ["i-ok"])
+        self.assertNotIn("i-gone", [i for ids in guide.values() if isinstance(ids, list) for i in ids])
+        self.assertEqual(guide["coverage"]["analyzed"], [1])
+
+    def test_synthesis_dropped_when_one_endpoint_leaves_coverage(self):
+        p = paper(total=3, done=(1, 2), target_pages=[1, 2], requested_scope="pages")
+        reading.apply_reading_state(p, [1], "completed", True)
+        reading.apply_reading_state(p, [2], "completed", True)
+        p["reading"]["insights"] = [insight("i1", "p1-1", 1), insight("i2", "p2-1", 2, type="evidence")]
+        relation = {"from": "i1", "to": "i2", "content": "实验支持方法。", "status": "provisional",
+                    "source_refs": [ref(), ref("p2-1", 2)]}
+        reading.apply_synthesis(p, "方法有实验支持。", [relation], {}, summary_refs=[ref()],
+                                expected_hash=reading.insights_hash(p))
+        self.assertEqual(p["reading_guide"]["relations"], [relation])
+        reading.apply_reading_state(p, [2], "failed", True)
+        reading.rebuild_guide(p)
+        self.assertEqual(p["reading_guide"]["relations"], [])
+        self.assertEqual(p["reading_guide"]["evidence"], [])
+        self.assertEqual(p["reading_guide"]["methods"], ["i1"])
+
 
 class SynthesisValidationTest(unittest.TestCase):
     def setUp(self):

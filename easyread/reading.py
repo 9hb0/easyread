@@ -483,11 +483,6 @@ def rebuild_guide(paper: dict) -> None:
     reading = paper.setdefault("reading", {})
     insights = reading.get("insights") or []
     guide = paper.setdefault("reading_guide", {})
-    if guide.get("synth_of") != insights_hash(paper):
-        invalidate_synthesis(paper)
-    guide["version"] = READING_VERSION
-    for key, typ in GUIDE_GROUPS:
-        guide[key] = [i["id"] for i in insights if i.get("type") == typ and i.get("id")]
     meta, tr = paper.get("meta") or {}, paper.get("translation") or {}
     count = meta.get("page_count")
     metadata_pages = _pages([p.get("n") for p in meta.get("pages") or [] if isinstance(p, dict)])
@@ -501,6 +496,23 @@ def rebuild_guide(paper: dict) -> None:
     full_complete = bool(total and full.issubset(analyzed))
     range_complete = bool(target and set(target).issubset(analyzed))
     complete = full_complete if is_full else range_complete
+    # 导航只能指向真正分析过的页：失败页残留的洞见不该继续出现在导读里
+    pages = {b.get("id"): b.get("page") for b in paper.get("blocks") or [] if isinstance(b, dict)}
+    usable = [i for i in insights if isinstance(i, dict) and i.get("id")
+              and all(pages.get(r.get("block")) in set(analyzed) for r in i.get("source_refs") or [])
+              and (not i.get("source_refs") or all(r.get("page") in set(analyzed) for r in i["source_refs"]))
+              and pages.get(i.get("block"), i.get("page")) in set(analyzed)]
+    ids = {i["id"] for i in usable}
+    if guide.get("synth_of") != insights_hash(paper):
+        invalidate_synthesis(paper)
+    guide["version"] = READING_VERSION
+    for key, typ in GUIDE_GROUPS:
+        guide[key] = [i["id"] for i in usable if i.get("type") == typ]
+    for key in ("relations", "checks"):
+        rows = guide.get(key)
+        if isinstance(rows, list):
+            guide[key] = [r for r in rows if isinstance(r, dict)
+                          and all(str(r.get(k) or "") in ids for k in ("from", "to", "insight"))]
     guide["coverage"] = {"analyzed": analyzed, "translated": done,
                          "total": total, "target_pages": target, "excluded_pages": sorted(full - set(target)),
                          "scope": requested, "range_complete": range_complete, "full_complete": full_complete}

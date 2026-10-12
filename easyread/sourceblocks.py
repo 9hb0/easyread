@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .store import dir_lock, write_json_atomic
 
-_SCHEMA = 1
+_SCHEMA = 3
 _LINES = re.compile(r"[^\r\n\f]+")
 
 
@@ -65,6 +65,14 @@ def _stream(chars):
     return "".join(letters), positions
 
 
+def _aligned(compact: str, char_stream: str) -> bool:
+    # PDFium renders some discretionary hyphens as U+FFFE. Accept only a
+    # one-to-one dash confirmed by the character extractor; other symbols
+    # still require an exact match, including every formula character.
+    return bool(compact) and len(compact) == len(char_stream) and all(
+        a == b or (a == "\ufffe" and b == "-") for a, b in zip(compact, char_stream))
+
+
 def _union(chars, positions) -> list | None:
     boxes = [chars[i][1] for i in set(positions)]
     if not boxes or any(box is None for box in boxes):
@@ -73,11 +81,13 @@ def _union(chars, positions) -> list | None:
             max(b[2] for b in boxes), max(b[3] for b in boxes)]
 
 
-def _paragraph_break(previous: list, current: list) -> bool:
-    height = max(previous[3] - previous[1], current[3] - current[1])
+def _paragraph_break(previous: list, current: list, ignore_indent: bool = False) -> bool:
+    # A PDFium text line can span multiple physical lines. Its large union
+    # box must not hide a real gap after a separate heading.
+    height = min(previous[3] - previous[1], current[3] - current[1])
     return (current[1] - previous[3] > height * .65
             or current[1] < previous[1] - height * .5
-            or current[0] - previous[0] > max(.012, height * .75))
+            or (not ignore_indent and current[0] - previous[0] > max(.012, height * .75)))
 
 
 def _character_text(chars) -> str:
@@ -101,10 +111,10 @@ def _character_text(chars) -> str:
 
 def _paragraphs(text: str, chars, char_stream: str, char_positions: list[int]):
     compact, raw_positions = _compact(text)
-    aligned = bool(compact) and compact == char_stream
+    aligned = _aligned(compact, char_stream)
     # 只有整页完整匹配时才用几何信息区分软换行与段落边界。
     raw_to_char = dict(zip(raw_positions, char_positions)) if aligned else {}
-    start, end, previous_box = None, None, None
+    start, end, previous_box, previous_line = None, None, None, ""
     for line in _LINES.finditer(text):
         if not line.group().strip():
             continue
@@ -113,13 +123,20 @@ def _paragraphs(text: str, chars, char_stream: str, char_positions: list[int]):
         gap = text[end:line.start()] if end is not None else ""
         separate = bool(re.search(r"\n[\s\r]*\n|\f", gap))
         if previous_box is not None and box is not None:
-            separate |= _paragraph_break(previous_box, box)
+            # PDFium may put a blank line after every wrapped PDF line. The
+            # verified line geometry determines paragraph breaks in that case.
+            bullet = r"^\s*[•▪*\-]\s"
+            height = min(previous_box[3] - previous_box[1], box[3] - box[1])
+            continuation = bool(re.match(bullet, previous_line) and not re.match(bullet, line.group())
+                                and 0 <= box[0] - previous_box[0] <= max(.03, height * 2)
+                                and box[0] < previous_box[2])
+            separate = "\f" in gap or _paragraph_break(previous_box, box, ignore_indent=continuation)
         if start is not None and separate:
             yield text[start:end].strip(), start, end
             start = None
         if start is None:
             start = line.start()
-        end, previous_box = line.end(), box
+        end, previous_box, previous_line = line.end(), box, line.group()
     if start is not None:
         yield text[start:end].strip(), start, end
 
@@ -143,7 +160,7 @@ def _page(page: int, txt: bytes | None, raw_chars: bytes | None) -> dict:
         text = _character_text(chars)
     char_stream, char_positions = _stream(chars)
     compact, raw_positions = _compact(text)
-    aligned = bool(compact) and compact == char_stream
+    aligned = _aligned(compact, char_stream)
     paragraphs = list(_paragraphs(text, chars, char_stream, char_positions))
     counts = Counter(_compact(en)[0] for en, _, _ in paragraphs)
     blocks = []

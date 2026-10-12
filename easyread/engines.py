@@ -129,7 +129,7 @@ def run_codex(c: dict, prompt: str, cwd: Path, images: list[Path], cancel=None) 
         raise EngineError(f"找不到 Codex 命令：{c.get('command') or 'codex'}（先装好并登录 Codex CLI）")
     fd, last = tempfile.mkstemp(suffix=".txt", prefix="easyread-codex-")
     os.close(fd)
-    args = [exe, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--color", "never", "-o", last]
+    args = [exe, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--color", "never", "--json", "-o", last]
     if c.get("model"):
         args += ["--model", c["model"]]
     if c.get("reasoning_effort"):
@@ -144,6 +144,24 @@ def run_codex(c: dict, prompt: str, cwd: Path, images: list[Path], cancel=None) 
         Path(last).unlink(missing_ok=True)
     if not text:
         raise EngineError("Codex 没有给出结果：" + (out or "")[-300:])
+    usages, complete = [], True
+    for line in out.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        if isinstance(usage, dict) and all(type(usage.get(k)) is int and usage[k] >= 0 for k in ("input_tokens", "output_tokens")):
+            usages.append(usage)
+        else:  # 任一轮缺失用量就整次作废：部分合计会低估成本
+            complete = False
+    if usages and complete:
+        prompt = sum(u["input_tokens"] for u in usages)  # cached_input_tokens is already included
+        output = sum(u["output_tokens"] for u in usages)
+        _tls.usage = {"prompt_tokens": prompt, "completion_tokens": output, "total_tokens": prompt + output}
+    _tls.model = c.get("model") or None
     return text
 
 
