@@ -1,0 +1,170 @@
+{
+ "note": "真实产出节选：SpaceFlow 第 2 页。完整复现见 docs/reading-acceptance.md。",
+ "blocks": [
+  {
+   "id": "p2-3",
+   "page": 2,
+   "type": "para",
+   "en": "To support this need, recent methods augment general-purpose 3D generators [3, 29] with controllable geometric or appearance guidance [28, 30]. On one hand, proxy-guided approaches [28, 31] enable geometric conditioning by guiding 3D generation with an input 3D shape. However, they apply this conditioning globally, such that all regions are equally constrained by the input geometry. On the other hand, other approaches introduce test-time, part-aware guidance for appearance transfer [30] or localized editing of implicit representations [32], while leaving geometry generation unconstrained or operating post-hoc on pre-existing representations. Appearance guidance is also limited to a single global condition, preventing different cues from being assigned to different regions. Existing approaches therefore lack a unified mechanism for local control over both geometry and appearance.",
+   "zh": "为应对这一需求，近期方法通过可控的几何或外观引导 [28, 30] 来扩充通用三维生成器 [3, 29]。一方面，代理引导（proxy-guided）方法 [28, 31] 通过以一个输入三维形状来引导三维生成，从而支持几何条件。但它们以全局方式施加这种条件，使所有区域同等受输入几何形状的约束。另一方面，其他方法引入测试时、部件感知的外观迁移（appearance transfer）引导 [30]，或对隐式表示（implicit representations）[32] 的局部编辑，而让几何生成保持无约束，或在已有表示上进行事后操作。外观引导同样局限于单一的全局条件，无法将不同的线索分配给不同区域。因此，现有方法缺乏一个统一的机制来同时在几何与外观上实现局部控制。",
+   "highlights": [
+    {
+     "id": "h-p2-3-0",
+     "block_id": "p2-3",
+     "category": "related_work",
+     "quote": "使所有区域同等受输入几何形状的约束",
+     "occurrence": 0
+    },
+    {
+     "id": "h-p2-3-1",
+     "block_id": "p2-3",
+     "category": "problem",
+     "quote": "现有方法缺乏一个统一的机制来同时在几何与外观上实现局部控制",
+     "occurrence": 0
+    }
+   ]
+  },
+  {
+   "id": "p2-4",
+   "page": 2,
+   "type": "para",
+   "en": "We propose SpaceFlow, a unified approach for local control of both geometry and appearance during 3D generation, as shown in Fig. 1. In practice, the user specifies the geometry and scene layout as an explicit geometric input, decomposed into an arbitrary set of local parts that can be addressed independently. For geometric conditioning, we assign a local control level to each part: higher levels enforce closer adherence to the specified geometry, whereas lower levels leave more freedom to the generative prior. The formulation is agnostic to how individual parts are represented, ranging from coarse geometric primitives to detailed meshes. Following [28], we represent parts as superquadric primitives [33], which provide a compact, expressive, and easily editable representation.",
+   "zh": "我们提出了 SpaceFlow，一个在三维生成过程中同时对几何与外观进行局部控制的统一方法，如图 1 所示。在实践中，用户将几何与场景布局指定为一个显式的几何输入，并将其分解为可独立寻址的任意一组局部部件。对于几何条件，我们为每个部件分配一个局部控制强度：较高的强度强制更贴近指定几何形状，而较低的强度则为生成先验留出更多自由度。该框架对部件的具体表征方式没有要求，既可以是粗糙的几何基元，也可以是精细的网格。遵循 [28]，我们将部件表示为超二次曲面基元（superquadric primitives）[33]，它提供了一种紧凑、表达力强且易于编辑的表征。",
+   "highlights": [
+    {
+     "id": "h-p2-4-0",
+     "block_id": "p2-4",
+     "category": "method",
+     "quote": "我们为每个部件分配一个局部控制强度：较高的强度强制更贴近指定几何形状，而较低的强度则为生成先验留出更多自由度",
+     "occurrence": 0
+    },
+    {
+     "id": "h-p2-4-1",
+     "block_id": "p2-4",
+     "category": "method",
+     "quote": "我们将部件表示为超二次曲面基元",
+     "occurrence": 0
+    }
+   ],
+   "annotations": [
+    {
+     "id": "a-p2-4-0",
+     "block_id": "p2-4",
+     "type": "concept",
+     "content": "超二次曲面是一类可参数化的三维形状，可用较少参数表达多种圆润或方形的部件形状。",
+     "basis": "ai_explanation",
+     "occurrence": 0,
+     "anchor_quote": "超二次曲面基元",
+     "source_refs": [
+      {
+       "page": 2,
+       "block": "p2-4",
+       "quote": "we represent parts as superquadric primitives"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "p2-5",
+   "page": 2,
+   "type": "para",
+   "en": "We use the same part decomposition for appearance conditioning. Specifically, the user can assign a distinct appearance condition to each part, allowing different regions to be controlled independently. We achieve this by restricting cross-attention to the condition associated with each part, while retaining global self-attention across all tokens. This enables distinct local appearances while preserving coherence and smooth blending across the generated asset.",
+   "zh": "我们对外观条件使用相同的部件分解。具体而言，用户可以为每个部件分配一个独立的外观条件，从而对不同区域进行独立控制。我们通过将交叉注意力（cross-attention）限制为仅作用于与每个部件相对应的条件，同时在所有 token 之间保留全局自注意力（self-attention），从而实现这一目标。这使得各局部外观可以呈现差异化，同时保持生成资产整体上的一致性与平滑过渡。",
+   "highlights": [
+    {
+     "id": "h-p2-5-0",
+     "block_id": "p2-5",
+     "category": "method",
+     "quote": "将交叉注意力（cross-attention）限制为仅作用于与每个部件相对应的条件，同时在所有 token 之间保留全局自注意力（self-attention）",
+     "occurrence": 0
+    }
+   ],
+   "annotations": [
+    {
+     "id": "a-p2-5-0",
+     "block_id": "p2-5",
+     "type": "method_explanation",
+     "content": "交叉注意力限制各部件读取的外观条件；全局自注意力让不同部件的 token 仍可相互关联，有助于维持整体协调与平滑过渡。",
+     "basis": "source_supported",
+     "occurrence": 0,
+     "anchor_quote": "保留全局自注意力（self-attention）",
+     "source_refs": [
+      {
+       "page": 2,
+       "block": "p2-5",
+       "quote": "while retaining global self-attention across all tokens. This enables distinct local appearances while preserving coherence and smooth blending across the generated asset."
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "insights": [
+  {
+   "id": "i11-44a8eb",
+   "type": "problem",
+   "content": "现有方法难以同时按区域控制几何贴合程度与外观条件。",
+   "block": "p2-3",
+   "page": 2,
+   "status": "provisional",
+   "source_refs": [
+    {
+     "page": 2,
+    "block": "p2-3",
+     "quote": "Existing approaches therefore lack a unified mechanism for local control over both geometry and appearance."
+    }
+   ]
+  },
+  {
+   "id": "i12-601796",
+   "type": "method",
+   "content": "SpaceFlow 为各部件设置局部几何控制强度，并用部件分解支持独立外观条件。",
+   "block": "p2-4",
+   "page": 2,
+   "status": "provisional",
+   "source_refs": [
+    {
+     "page": 2,
+     "block": "p2-4",
+     "quote": "For geometric conditioning, we assign a local control level to each part:"
+    },
+    {
+     "page": 2,
+     "block": "p2-5",
+     "quote": "the user can assign a distinct appearance condition to each part"
+    }
+   ]
+  },
+  {
+   "id": "i13-a00fa5",
+   "type": "method",
+   "content": "外观路由限制部件交叉注意力的条件范围，同时保留跨 token 的全局自注意力。",
+   "block": "p2-5",
+   "page": 2,
+   "status": "provisional",
+   "source_refs": [
+    {
+     "page": 2,
+     "block": "p2-5",
+     "quote": "We achieve this by restricting cross-attention to the condition associated with each part, while retaining global self-attention across all tokens."
+    }
+   ]
+  }
+ ],
+ "reading_guide": {
+  "version": 2,
+  "status": "partial",
+  "coverage": {
+   "analyzed": [1, 2, 3, 4, 7, 12],
+   "translated": [1, 2, 3, 4, 5, 6, 7, 12],
+   "total": 36,
+   "target_pages": [1, 2, 3, 4, 5, 6, 7, 12],
+   "scope": "pages",
+   "range_complete": false,
+   "full_complete": false
+  },
+  "problems": ["i11-44a8eb"],
+  "methods": ["i12-601796", "i13-a00fa5"]
+ }
+}

@@ -2,12 +2,31 @@
 
 记录日期：2026-10-12。四阶段已分别提交，回归与真实论文抽检结果如下。
 
+## 修改说明
+
+| 阶段 | 提交 | 主要内容 |
+| --- | --- | --- |
+| 一 | `b4f31ea` | 原文块稳定 ID 与坐标、翻译同批返回六色高亮、前端高亮渲染与筛选 |
+| 二 | `2ee8987` | 精读批注、独立页面状态、补精读命令、版本失效与失败降级 |
+| 三 | `3ad062e` | 研究要点提取、全文研究导航、覆盖范围与完成状态 |
+| 四 | `ce68a03`、`047cef1` | 提示词质量约束、跨栏分块修复、导读覆盖过滤、用量统计、真实论文验收 |
+
+新增文件：`easyread/reading.py`、`easyread/sourceblocks.py`、`docs/reading.md`、`docs/reading-acceptance.md`、`docs/reading-sample.json`，以及 `tests/` 下的精读单元、集成、前端与验收测试。
+
+数据变化：`paper.json` 增加 `reading`（页面状态、要点、版本绑定）与 `reading_guide`（导航、覆盖范围、综合结论）。旧论文无这些字段时照常阅读，用 `enrich` 补精读。
+
 ## 自动化测试
 
-- `.venv\Scripts\python.exe -m unittest discover -s tests`：211 项通过，0 失败。
+- `.venv\Scripts\python.exe -m unittest discover -s tests`：216 项通过，0 失败。
 - `node tests\reading-browser.cjs`：37 项通过。
 - `node tests\e2e.cjs`：全部通过。
 - `node tests\reading-ui-check.cjs`、`deepread-ui-check.cjs`、`discuss-delete-check.cjs`、`settings-deepread.cjs`：通过。
+
+## 样例成果
+
+[reading-sample.json](reading-sample.json) 是 SpaceFlow 第 2 页的真实产出节选，含中英对照、六色高亮、批注与依据、论文级要点和研究导航。`tests/test_reading_sample.py` 用产品自身的校验器检查这个样例，代码演进导致样例失效时测试会失败。
+
+界面效果见 `artifacts/reading-qa/screenshots/`：正文高亮与筛选、批注弹窗、研究导航、深色移动端布局，每篇论文各 4 张。
 
 ## 真实论文抽检
 
@@ -49,7 +68,9 @@ Codex CLI 用量来自 JSONL 的 `turn.completed`，缓存 token 不重复累加
 
 ## 已知限制
 
-- 语义质量门槛（分类 90%、必要性 85%、零严重幻觉）依赖模型表现，审阅结论需人工复核。
+- 本轮所有语义审阅都由模型完成，任务书要求的人工抽检尚未进行；分类 90%、必要性 85%、零严重幻觉的门槛未经人工确认。
+- LingBot-Map 当前快照（Codex 通道生成）未完成语义审阅；早前 Claude 通道的审阅对应另一个快照，两者哈希不同。
+- 创新类高亮判定与背景要点提取的提示词改动发生在额度耗尽之后，没有再跑一次真实模型验证其效果。
 - 极少数页面的来源引文无法逐字定位，整页精读会失败并跳过，译文不受影响，重试后可恢复。
 - 已有旧译文问题（例如缺图注）仍需单独修复，不在精读改造范围内。
 - Codex CLI 的模型目录来自本机配置，模型或目录升级可能需要重新验证。
