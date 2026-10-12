@@ -8,7 +8,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from . import engines, pdfwork, prompts, sources
+from . import engines, pdfwork, prompts, reading, sources
 from .checks import block_problems, tex_problems
 from .log import log
 from .paperdata import add_discussion, merge_blocks, set_block_text
@@ -109,10 +109,11 @@ def journal(ws: Workspace, line: str) -> None:
 
 
 def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, cancel, say) -> None:
+    reading_on = bool(cfg.get("reading_enabled", True))
     mode = engines.image_mode(cfg)
     images = [pdfwork.engine_image(ws.root, n) for n in batch] if mode != "text" else []
     nxt = batch[-1] + 1
-    prompt = prompts.translate(ws, batch, mode, _next_head(ws, nxt) if nxt <= total_pages else "")
+    prompt = prompts.translate(ws, batch, mode, _next_head(ws, nxt) if nxt <= total_pages else "", reading=reading_on)
     text = engines.run(cfg, prompt, ws.root, images, cancel)
     try:
         data = engines.parse_json(text)
@@ -121,12 +122,17 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         raise
     data = _normalize(data, batch, _taken(ws, batch))
     problems = _problems(data)
+    if reading_on:
+        problems += reading.validate_highlights(data["blocks"])
     if problems:  # 给一次修的机会
         say(f"第 {batch[0]} 页起有 {len(problems)} 处公式或格式问题，正在让模型修正")
         try:
             fixed = engines.parse_json(engines.run(cfg, prompts.repair(prompts.dump(data), problems), ws.root, None, cancel))
             fixed = _normalize(fixed, batch, _taken(ws, batch))
-            if fixed["blocks"] and len(_problems(fixed)) < len(problems):
+            fixed_problems = _problems(fixed)
+            if reading_on:
+                fixed_problems += reading.validate_highlights(fixed["blocks"])
+            if fixed["blocks"] and len(fixed_problems) < len(problems):
                 data = fixed
         except engines.EngineError as e:
             journal(ws, f"第 {batch} 页修正失败，保留原译：{e}")
@@ -134,7 +140,10 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         raise engines.EngineError("模型没有译出任何内容")
     with _merge_lock:
         data = _normalize(data, batch, _taken(ws, batch))  # 并发时别的批可能刚占用了同名 id
-        merge_blocks(ws, data, done=batch, replace_pages=batch)
+        if reading_on:
+            reading.validate_highlights(data["blocks"])  # id 可能被重排，重新校验编号
+        merge_blocks(ws, data, done=batch, replace_pages=batch,
+                     reading={"pages": batch, "status": "completed" if reading_on else "skipped", "enabled": reading_on})
         _save_checks(ws, data.get("checks"), batch)
         try:
             pdfwork.locate(ws.root)

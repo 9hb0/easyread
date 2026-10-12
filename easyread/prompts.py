@@ -36,6 +36,16 @@ id 规则：段落 p{页}-{序号}，标题 s{编号，点换成横线}，公式
 注意 JSON 里 TeX 的反斜杠要写两个（\\\\frac、\\\\text、\\\\bar）。字符串里的中文引号用“”或「」，不要出现没转义的英文双引号 "。表格和图放在正文第一次提到它的段落之后。"""
 
 
+READING_RULES = """精读任务（和翻译一起完成）：
+翻译每个文字块时，顺带给它标“语义高亮”——在该块上加 highlights 字段：
+  "highlights": [{"category": "method", "quote": "该块 zh 译文里的一段连续原话", "occurrence": 0}]
+- category 六选一：background 背景知识（理解论文必需的概念、定义、理论）；related_work 相关工作（别人已提出的方法、已有研究及其优缺点）；problem 解决的问题（研究动机、缺口、挑战、目标）；method 提出的方法（本文的技术方案、模型、算法、架构）；innovation 核心创新（与已有工作有实质差异的设计或贡献）；evidence 论据实验（支撑结论的实验数据、性能比较、证明）。
+- quote 必须逐字来自该块最终的 zh 译文（连续子串，含标点），不得改写、不得跨块；occurrence 是这个字符串在该块译文里第几次出现，从 0 开始。
+- 只标关键短语或关键句，优先短的；一段可以没有任何高亮；拿不准就不标，宁缺毋滥。
+- 同一块内的高亮不要互相重叠；相关工作里的技术不是 innovation；作者声称的效果不等于 evidence；不要因为出现 novel/propose/significant 这类词就标创新或证据。
+- 段落、标题、列表项、表格和图的中文题注都可以加 highlights；公式块不加。不得为了高亮改译文措辞。"""
+
+
 def _context(ws: Workspace, pages: list[int]) -> str:
     paper = ws.load("paper")
     meta = paper.get("meta", {})
@@ -57,7 +67,7 @@ def _context(ws: Workspace, pages: list[int]) -> str:
     return "\n".join(lines)
 
 
-def translate(ws: Workspace, pages: list[int], engine: str, next_head: str) -> str:
+def translate(ws: Workspace, pages: list[int], engine: str, next_head: str, reading: bool = False) -> str:
     texts = []
     for n in pages:
         p = ws.root / "extract" / f"page-{n:03d}.txt"
@@ -71,8 +81,9 @@ def translate(ws: Workspace, pages: list[int], engine: str, next_head: str) -> s
         see = f"\n先用 Read 工具看原页图 {imgs}，以原页为准核对公式、表格、上下标和阅读顺序（双栏论文按栏读）。抽取的文字只作参考。"
     elif engine == "attached":
         see = "\n附上了这几页的原页图，以原页为准核对公式、表格和阅读顺序。"
+    rules = RULES + ("\n\n" + READING_RULES if reading else "")
     return (f"你在把一篇学术论文译成中文，这次只处理第 {', '.join(map(str, pages))} 页。{see}\n\n"
-            f"{_context(ws, pages)}\n\n{RULES}\n\n{SCHEMA}\n\n" + "\n\n".join(texts) + look)
+            f"{_context(ws, pages)}\n\n{rules}\n\n{SCHEMA}\n\n" + "\n\n".join(texts) + look)
 
 
 def repair(original_json: str, problems: list[str]) -> str:

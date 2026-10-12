@@ -14,6 +14,7 @@
   }
   const fullText = (root) => textNodes(root).map((t) => t.data).join("");
   PR.fullText = fullText;
+  PR.textNodesIn = textNodes;  // 语义高亮（reading.js）复用这套遍历
 
   function offsetOf(root, container, offset) {
     let pos = 0;

@@ -5,6 +5,7 @@ import hashlib
 import json
 
 from .store import Workspace, now_iso
+from . import reading as reading_mod
 
 BLOCK_TYPES = {"heading", "para", "list", "math", "table", "figure", "references", "note"}
 DISCUSSION_KINDS = {"explain", "qa", "insight", "reply", "check"}
@@ -23,7 +24,7 @@ def parse_pages(spec) -> list[int]:
     return out
 
 
-def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None) -> dict:
+def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, reading: dict | None = None) -> dict:
     """并入一批块。同 id 整块替换；新块按 _after 或页码顺序插入。
     replace_pages：先删掉这些页上已有的块（重新翻译某几页时用）。"""
     if isinstance(data, list):
@@ -68,6 +69,9 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None) -> di
         tr = paper.setdefault("translation", {})
         if data.get("translation"):
             tr.update(data["translation"])
+        if reading:
+            reading_mod.apply_reading_state(paper, parse_pages(reading.get("pages") or []),
+                                             reading.get("status") or "completed", bool(reading.get("enabled", True)))
         if done:
             tr["done_pages"] = sorted(set(tr.get("done_pages", [])) | set(parse_pages(done)))
             total = paper.get("meta", {}).get("page_count") or 0
@@ -124,7 +128,7 @@ def delete_discussion(ws: Workspace, did: str) -> int:
 
 
 def set_block_text(ws: Workspace, key: str, zh: str) -> None:
-    """重译一段后写回译者稿。key 同页面：块 id、id#caption、id#序号。"""
+    """重译一段后写回译者稿。key 同页面：块 id、id#caption、id#序号。译文变了，这块的旧高亮作废。"""
     bid, _, field = key.partition("#")
 
     def apply(paper):
@@ -137,6 +141,7 @@ def set_block_text(ws: Workspace, key: str, zh: str) -> None:
                 b["items"][int(field)]["zh"] = zh
             else:
                 b["zh"] = zh
+            b.pop("highlights", None)
             return
         raise KeyError(key)
     ws.update("paper", apply)

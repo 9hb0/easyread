@@ -171,6 +171,38 @@ mark.hl.q { box-shadow: inset 0 -.14em 0 color-mix(in srgb, var(--mine) 65%, tra
 mark.hl.agent { background: transparent; box-shadow: inset 0 -.12em 0 color-mix(in srgb, var(--accent) 45%, transparent); cursor: default; }
 mark.hl.active { outline: 2px solid color-mix(in srgb, var(--mine) 40%, transparent); outline-offset: 1px; }
 mark.hl.agent.active { background: var(--hl-q); outline: 0; }
+
+/* AI 精读语义高亮：底色来自 base.css 的 --sem-*（浅色 32% 混合，深色 44%） */
+mark.sem { border-radius: 2px; padding: .06em 0; cursor: pointer; color: inherit; }
+mark.sem.cat-background { background: color-mix(in srgb, var(--sem-background) 32%, transparent); }
+mark.sem.cat-related_work { background: color-mix(in srgb, var(--sem-related_work) 26%, transparent); }
+mark.sem.cat-problem { background: color-mix(in srgb, var(--sem-problem) 30%, transparent); }
+mark.sem.cat-method { background: color-mix(in srgb, var(--sem-method) 28%, transparent); }
+mark.sem.cat-innovation { background: color-mix(in srgb, var(--sem-innovation) 26%, transparent); }
+mark.sem.cat-evidence { background: color-mix(in srgb, var(--sem-evidence) 34%, transparent); }
+mark.sem:hover { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 30%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-background { background: color-mix(in srgb, var(--sem-background) 44%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-related_work { background: color-mix(in srgb, var(--sem-related_work) 38%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-problem { background: color-mix(in srgb, var(--sem-problem) 42%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-method { background: color-mix(in srgb, var(--sem-method) 40%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-innovation { background: color-mix(in srgb, var(--sem-innovation) 38%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-evidence { background: color-mix(in srgb, var(--sem-evidence) 46%, transparent); }
+
+/* 筛选弹层和类别圆点 */
+.rf-list { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
+.rf-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; background: none; border-radius: 6px; cursor: pointer; font: inherit; color: inherit; text-align: left; }
+.rf-row:hover { background: var(--accent-soft); }
+.rf-row.on { background: var(--accent-soft-2); }
+.rf-row b { margin-left: auto; font-weight: 500; opacity: .55; font-size: .85em; }
+.rf-row .dot, .popover .hd .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; vertical-align: -1px; }
+.dot.cat-background { background: var(--sem-background); }
+.dot.cat-related_work { background: var(--sem-related_work); }
+.dot.cat-problem { background: var(--sem-problem); }
+.dot.cat-method { background: var(--sem-method); }
+.dot.cat-innovation { background: var(--sem-innovation); }
+.dot.cat-evidence { background: var(--sem-evidence); }
+.rf-btns { display: flex; gap: 8px; padding: 8px 4px 2px; }
+.rf-pop { padding: 4px 2px; color: var(--ink-2); }
 code { font: .86em var(--mono); background: var(--accent-soft); padding: .1em .3em; border-radius: 3px; }
 
 .edited-dot { position: absolute; top: .72em; left: -24px; width: 5px; height: 5px; border-radius: 50%; background: var(--mine); opacity: .8; }
