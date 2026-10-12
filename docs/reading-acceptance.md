@@ -26,7 +26,15 @@
 
 [reading-sample.json](reading-sample.json) 是 SpaceFlow 第 2 页的真实产出节选，含中英对照、六色高亮、批注与依据、论文级要点和研究导航。`tests/test_reading_sample.py` 用产品自身的校验器检查这个样例，代码演进导致样例失效时测试会失败。
 
-界面效果见 `artifacts/reading-qa/screenshots/`：正文高亮与筛选、批注弹窗、研究导航、深色移动端布局，每篇论文各 4 张。
+界面效果（真实论文，`docs/images/`）：
+
+![六色高亮与批注卡片](images/reading-highlights.png)
+
+![研究导航](images/reading-guide.png)
+
+![深色移动端](images/reading-mobile-dark.png)
+
+完整截图（每篇论文 4 张：正文、批注弹窗、研究导航、深色移动端）在 `artifacts/reading-qa/screenshots/`。
 
 ## 真实论文抽检
 
