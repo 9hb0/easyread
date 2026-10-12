@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
-from .store import text_hash
+import json
+
+from .store import now_iso, text_hash
 
 READING_VERSION = 1
 
@@ -35,6 +37,21 @@ BASES = {
     "source_supported": "有原文依据",
     "ai_explanation": "AI 解释",
 }
+
+INSIGHT_TYPES = {
+    "background": "背景",
+    "related_work": "相关工作",
+    "problem": "研究问题",
+    "method": "方法",
+    "innovation": "创新",
+    "evidence": "证据",
+    "limitation": "局限",
+}
+
+INSIGHT_STATUSES = ("provisional", "supported", "unsupported")
+GUIDE_GROUPS = (("background", "background"), ("related_work", "related_work"), ("problems", "problem"),
+                ("methods", "method"), ("innovations", "innovation"), ("evidence", "evidence"),
+                ("limitations", "limitation"))
 
 
 def block_zh(block: dict) -> str:
@@ -166,6 +183,115 @@ def validate_annotations(blocks: list[dict]) -> list[str]:
 def validate_reading(blocks: list[dict]) -> list[str]:
     """一次校验高亮 + 批注（翻译批次和补精读共用）。"""
     return validate_highlights(blocks) + validate_annotations(blocks)
+
+
+def validate_insights(insights, blocks: list[dict]) -> tuple[list[dict], list[str]]:
+    """校验模型返回的研究要点：类型合法、内容非空、block 必须是本批的块。
+    返回 (合格列表, 问题列表)。id 在并入 paper 时按去重结果生成。"""
+    out, problems = [], []
+    if insights is None:
+        return out, problems
+    if not isinstance(insights, list):
+        return out, ["insights 不是数组"]
+    pages = {b.get("id"): b.get("page") for b in blocks}
+    for it in insights:
+        if not isinstance(it, dict):
+            problems.append(f"研究要点不是对象：{str(it)[:60]}")
+            continue
+        typ = it.get("type")
+        if typ not in INSIGHT_TYPES:
+            problems.append(f"研究要点类型不合法：{str(typ)[:40]}")
+            continue
+        content = str(it.get("content") or "").strip()
+        if not content or len(content) > 300:
+            problems.append(f"研究要点内容为空或超长：{content[:40]}")
+            continue
+        block = str(it.get("block") or "")
+        if block not in pages:
+            problems.append(f"研究要点引用的块不在本批：{block}")
+            continue
+        status = it.get("status") or "provisional"
+        if status not in INSIGHT_STATUSES:
+            problems.append(f"研究要点状态不合法：{str(status)[:40]}")
+            continue
+        out.append({"type": typ, "content": content, "block": block, "page": pages[block], "status": status})
+    return out, problems
+
+
+def _norm_key(s: str) -> str:
+    return "".join(ch for ch in str(s) if ch.isalnum())
+
+
+def merge_insights(existing: list[dict], incoming: list[dict]) -> list[dict]:
+    """并入一批研究要点：同类型同内容（忽略空白和标点）的合并 source_refs，状态就高不就低。"""
+    rank = {"unsupported": 0, "provisional": 1, "supported": 2}
+    out = list(existing or [])
+    index = {(_norm_key(i.get("content")), i.get("type")): i for i in out}
+    for it in incoming or []:
+        key = (_norm_key(it.get("content")), it.get("type"))
+        hit = index.get(key)
+        if hit:
+            refs = hit.setdefault("source_refs", [{"page": hit.get("page"), "block": hit.get("block")}])
+            ref = {"page": it.get("page"), "block": it.get("block")}
+            if ref not in refs:
+                refs.append(ref)
+            if rank.get(it.get("status"), 1) > rank.get(hit.get("status"), 1):
+                hit["status"] = it["status"]
+            continue
+        item = dict(it)
+        item["id"] = ""
+        item["source_refs"] = [{"page": it.get("page"), "block": it.get("block")}]
+        out.append(item)
+        index[key] = item
+    for k, i in enumerate(out):
+        if not i.get("id"):
+            i["id"] = f"i{k + 1}-{text_hash(i['content'])[:6]}"
+    return out
+
+
+def drop_insights_on_pages(insights: list[dict], pages: list[int]) -> list[dict]:
+    """重译某几页后，来源全部落在这些页上的旧研究要点作废。"""
+    drop = set(pages)
+    return [i for i in insights or []
+            if not all(r.get("page") in drop for r in i.get("source_refs") or [{"page": i.get("page")}])]
+
+
+def rebuild_guide(paper: dict) -> None:
+    """把 insights 按类型重组成 reading_guide，更新覆盖范围和状态。纯程序，不调模型。"""
+    reading = paper.setdefault("reading", {})
+    insights = reading.get("insights") or []
+    guide = paper.setdefault("reading_guide", {})
+    guide["version"] = READING_VERSION
+    for key, typ in GUIDE_GROUPS:
+        guide[key] = [i["id"] for i in insights if i.get("type") == typ]
+    done = sorted({int(p) for p in paper.get("translation", {}).get("done_pages", [])})
+    states = reading.get("pages") or {}
+    analyzed = [p for p in done if (states.get(str(p)) or {}).get("status") == "completed"]
+    guide["coverage"] = {"analyzed": analyzed, "translated": done,
+                         "total": paper.get("meta", {}).get("page_count") or 0}
+    guide["status"] = "complete" if (analyzed and analyzed == done) else ("partial" if analyzed else "pending")
+
+
+def insights_hash(paper: dict) -> str:
+    insights = (paper.get("reading") or {}).get("insights") or []
+    return text_hash(json.dumps(insights, ensure_ascii=False, sort_keys=True))
+
+
+def apply_synthesis(paper: dict, summary: str, relations: list[dict], statuses: dict) -> None:
+    """一次模型综合的结果写回：关系的两端必须是已有 insight，状态覆盖只认合法值。"""
+    reading = paper.setdefault("reading", {})
+    ids = {i.get("id") for i in reading.get("insights") or []}
+    relations = [r for r in relations or []
+                 if isinstance(r, dict) and r.get("from") in ids and r.get("to") in ids and str(r.get("content") or "").strip()]
+    for i in reading.get("insights") or []:
+        if i.get("id") in statuses:
+            i["status"] = statuses[i["id"]]
+    guide = paper.setdefault("reading_guide", {})
+    if summary:
+        guide["summary"] = summary
+    guide["relations"] = relations
+    guide["synth_of"] = insights_hash(paper)
+    guide["updated"] = now_iso()
 
 
 def reading_pages(blocks: list[dict]) -> set[int]:

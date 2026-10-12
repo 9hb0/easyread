@@ -110,6 +110,14 @@ def _validate_reading(data: dict) -> tuple[list[str], set[int]]:
     return problems, raw - kept
 
 
+def _validate_insights(data: dict) -> list[dict]:
+    """校验研究要点（在 blocks 校验之后调用，保证 block 引用有效）。返回合格列表。"""
+    insights, problems = reading.validate_insights(data.get("insights"), data.get("blocks", []))
+    data["insights"] = insights
+    data["reading_insight_problems"] = problems  # 计入修复流程
+    return insights
+
+
 def journal(ws: Workspace, line: str) -> None:
     """每篇论文自己的翻译记录 job.log，页面上“查看记录”看的就是它。"""
     with open(ws.root / "job.log", "a", encoding="utf-8") as f:
@@ -132,6 +140,8 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
     problems = _problems(data)
     reading_failed: set[int] = set()
     if reading_on:
+        _validate_insights(data)
+        problems += data.pop("reading_insight_problems")
         rp, rfp = _validate_reading(data)
         problems += rp
         reading_failed = rfp
@@ -143,6 +153,8 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
             fixed_problems = _problems(fixed)
             fixed_failed: set[int] = set()
             if reading_on:
+                _validate_insights(fixed)
+                fixed_problems += fixed.pop("reading_insight_problems")
                 fp, ffp = _validate_reading(fixed)
                 fixed_problems += fp
                 fixed_failed = ffp
@@ -157,11 +169,12 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         data = _normalize(data, batch, _taken(ws, batch))  # 并发时别的批可能刚占用了同名 id
         if reading_on:
             reading.validate_reading(data["blocks"])  # id 可能被重排，重新校验编号
+            _validate_insights(data)  # 块 id 重排后 block 引用要重新校验
             if reading_failed:
                 journal(ws, f"第 {sorted(reading_failed)} 页精读标注不合格，译文已保留，可稍后补精读")
         merge_blocks(ws, data, done=batch, replace_pages=batch,
                      reading={"pages": batch, "statuses": {p: ("failed" if p in reading_failed else "completed") for p in batch},
-                              "enabled": reading_on} if reading_on else
+                              "insights": data.get("insights") or [], "enabled": reading_on} if reading_on else
                     {"pages": batch, "status": "skipped", "enabled": False})
         _save_checks(ws, data.get("checks"), batch)
         try:
@@ -294,6 +307,12 @@ def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, repo
         report(min((i + 1) * size, len(pages)), len(pages),
                 f"补精读 {min((i + 1) * size, len(pages))}/{len(pages)} 页" + (f"，第 {sorted(failed)} 页失败" if failed else ""))
     journal(ws, "补精读结束" + (f"，{len(failed)} 页失败：{sorted(failed)}" if failed else "，全部成功"))
+    if not failed:
+        try:
+            finalize_reading(ws, cfg, cancel)  # 覆盖变全了就综合研究导航
+        except Exception as e:  # noqa: BLE001 —— 导航失败不影响补精读结果
+            journal(ws, f"研究导航综合失败：{e}")
+            log.warning("研究导航综合失败 %s: %s", ws.id, e)
     return failed
 
 
@@ -306,7 +325,9 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel) -> None:
     if not isinstance(items, list):
         raise engines.EngineError("补精读返回里没有 blocks")
     clean = _clean_enrich_items(ws, items, batch)
+    insights, insight_problems = reading.validate_insights(data.get("insights") if isinstance(data, dict) else None, clean)
     problems, raw = _validate_reading({"blocks": clean})
+    problems += insight_problems
     kept = reading.reading_pages(clean)
     if problems:  # 给一次修的机会：只发有问题的块和错误说明，不重译
         try:
@@ -315,8 +336,9 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel) -> None:
             fixed_items = fixed.get("blocks") if isinstance(fixed, dict) else fixed
             fixed_clean = _clean_enrich_items(ws, fixed_items if isinstance(fixed_items, list) else [], batch)
             fp, _ = _validate_reading({"blocks": fixed_clean})
-            if fixed_clean and len(fp) < len(problems):
-                clean, problems = fixed_clean, fp
+            fixed_insights, fip = reading.validate_insights(fixed.get("insights") if isinstance(fixed, dict) else None, fixed_clean)
+            if fixed_clean and len(fp) + len(fip) < len(problems):
+                clean, problems, insights = fixed_clean, fp + fip, fixed_insights
                 kept = reading.reading_pages(clean)
         except engines.EngineError as e:
             journal(ws, f"补精读第 {batch} 页修正失败，保留已合格部分：{e}")
@@ -333,11 +355,52 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel) -> None:
                 else:
                     target.pop(k, None)
         statuses = {p: ("completed" if (p in kept or p not in raw) else "failed") for p in batch}
+        paper.setdefault("reading", {})["insights"] = reading.merge_insights(
+            (paper.get("reading") or {}).get("insights", []), insights)
         reading.apply_reading_state(paper, batch, statuses, True)
 
     with _merge_lock:
         ws.update("paper", apply)
     journal(ws, f"补精读第 {batch} 页完成" + (f"，{len(problems)} 处标注不合格已丢弃" if problems else ""))
+
+
+def finalize_reading(ws: Workspace, cfg: dict, cancel=None) -> bool:
+    """翻译（或补精读）收尾：程序重建研究导航；范围全覆盖且 insights 有更新时做一次模型综合。
+    返回是否做了模型综合。"""
+    if not cfg.get("reading_enabled", True):
+        return False
+    ws.update("paper", reading.rebuild_guide)
+    paper = ws.load("paper")
+    guide = paper.get("reading_guide") or {}
+    if guide.get("status") != "complete" or not (paper.get("reading") or {}).get("insights"):
+        return False
+    if guide.get("synth_of") == reading.insights_hash(paper):  # 没有新 insights，不重复综合
+        return False
+    _synthesize_guide(ws, cfg, cancel)
+    return True
+
+
+def _synthesize_guide(ws: Workspace, cfg: dict, cancel) -> None:
+    """全文完成后的研究导航综合：一次模型调用，产出 summary / relations / 核验。"""
+    paper = ws.load("paper")
+    data = engines.parse_json(engines.run(cfg, prompts.synthesize(ws), ws.root, None, cancel))
+    if not isinstance(data, dict):
+        raise engines.EngineError("研究导航综合返回的不是 JSON 对象")
+    summary = str(data.get("summary") or "").strip()[:200]
+    relations = []
+    for r in data.get("relations") or []:
+        if not isinstance(r, dict):
+            continue
+        c = str(r.get("content") or "").strip()
+        if c:
+            relations.append({"from": str(r.get("from") or ""), "to": str(r.get("to") or ""), "content": c[:300]})
+    statuses = {}
+    for s in data.get("checks") or []:
+        if isinstance(s, dict) and s.get("status") in reading.INSIGHT_STATUSES:
+            statuses[str(s.get("insight") or "")] = s["status"]
+    with _merge_lock:
+        ws.update("paper", lambda p: reading.apply_synthesis(p, summary, relations, statuses))
+    journal(ws, "研究导航综合完成：summary、" + f"{len(relations)} 条关系、{len(statuses)} 项核验")
 
 
 def _clean_enrich_items(ws: Workspace, items: list, batch: list[int]) -> list[dict]:

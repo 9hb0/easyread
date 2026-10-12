@@ -7,6 +7,8 @@ const readingJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/readin
 const anchorJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/anchor.js"), "utf8");
 const panelsJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/panels.js"), "utf8");
 const marginJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/margin.js"), "utf8");
+const guideJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/guide.js"), "utf8");
+const pageviewJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/pageview.js"), "utf8");
 const baseCss = fs.readFileSync(path.join(root, "easyread/web/css/base.css"), "utf8");
 const readerCss = fs.readFileSync(path.join(root, "easyread/web/css/reader.css"), "utf8");
 
@@ -31,5 +33,11 @@ for (const cat of ["background", "related_work", "problem", "method", "innovatio
   check(readerCss.includes(".dot.cat-" + cat), "reader.css must style the ." + cat + " filter dot");
 }
 check(readerCss.includes(".card.reading"), "reader.css must style reading annotation cards");
+check(readerHtml.includes("js/reader/guide.js") && readerHtml.includes('id="guidepanel"'), "reader.html must have the guide panel");
+check(readerHtml.includes('data-act="guide"'), "toolbar must have the guide button");
+check(guideJs.includes("PR.toggleGuide") && guideJs.includes("reading_guide"), "guide.js must render the research navigation");
+check(guideJs.includes("data-goto"), "guide items must jump to source blocks");
+check(pageviewJs.includes('name === "guide"'), "openSide must support the guide panel");
+check(fs.readFileSync(path.join(root, "easyread/web/css/reader-panels.css"), "utf8").includes("#guidepanel"), "panel CSS must include #guidepanel");
 console.log("reading UI checks passed");
 

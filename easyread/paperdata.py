@@ -70,6 +70,12 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, readi
         if data.get("translation"):
             tr.update(data["translation"])
         if reading:
+            if replace_pages and (paper.get("reading") or {}).get("insights"):
+                paper["reading"]["insights"] = reading_mod.drop_insights_on_pages(
+                    paper["reading"]["insights"], parse_pages(replace_pages))
+            if reading.get("insights"):
+                paper.setdefault("reading", {})["insights"] = reading_mod.merge_insights(
+                    (paper.get("reading") or {}).get("insights", []), reading["insights"])
             reading_mod.apply_reading_state(paper, parse_pages(reading.get("pages") or []),
                                              reading.get("statuses") or reading.get("status") or "completed",
                                              bool(reading.get("enabled", True)))

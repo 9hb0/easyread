@@ -34,6 +34,7 @@
   <button class="btn" data-act="chat" title="边读边问 AI（A）"></button>
   <button class="btn" data-act="deepread" title="精读论文"></button>
 <button class="btn" data-act="reading" title="语义高亮筛选" style="display:none"></button>
+<button class="btn" data-act="guide" title="研究导航：问题、方法、创新、证据"></button>
   <button class="btn" data-act="settings" title="字号、版心、主题（=、- 调字号）">Aa</button>
   <button class="save-state" data-act="about" title="保存状态"><i></i><span>…</span></button>
 </header>
@@ -72,6 +73,7 @@
 <section id="notespanel" class="side-panel" aria-label="笔记"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
 <section id="chatpanel" class="side-panel" aria-label="问 AI"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
 <section id="deepreadpanel" class="side-panel" aria-label="精读论文"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
+<section id="guidepanel" class="side-panel" aria-label="研究导航"><div class="side-panel-grip" data-side-grip role="separator" aria-orientation="vertical" aria-label="拖动调整面板宽度" tabindex="0"></div></section>
 <div class="dialog-backdrop" id="readerDlg"><div class="dialog" role="dialog"></div></div>
 <div class="dialog-backdrop" id="settingsDlg"><div class="dialog" role="dialog" aria-label="设置"></div></div>
 <div class="dialog-backdrop" id="textDlg"><div class="dialog wide" role="dialog"></div></div>
@@ -100,6 +102,7 @@
 <script src="/web/js/reader/notespanel.js"></script>
 <script src="/web/js/reader/chat.js"></script>
 <script src="/web/js/reader/deepread.js"></script>
+<script src="/web/js/reader/guide.js"></script>
 <script src="/web/js/reader/jumpback.js"></script>
 <script src="/web/js/reader/keys.js"></script>
 <script src="/web/js/reader/export.js"></script>

@@ -67,8 +67,10 @@
     body.classList.toggle("np-open", name === "notes");
     body.classList.toggle("ch-open", name === "chat");
     body.classList.toggle("dr-open", name === "deepread");
+    body.classList.toggle("gd-open", name === "guide");
     PR.$('[data-act="chat"]').classList.toggle("on", name === "chat");
     PR.$('[data-act="deepread"]').classList.toggle("on", name === "deepread");
+    PR.$('[data-act="guide"]').classList.toggle("on", name === "guide");
     PR.$('[data-act="pages"]').classList.toggle("on", name === "pages");
     PR.$('[data-act="notes"]').classList.toggle("on", name === "notes");
     clearTimeout(sideT);

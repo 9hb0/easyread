@@ -106,6 +106,13 @@ class Jobs:
 
         started = time.time()
         failed = translate.translate_pages(ws, cfg, pages, cancel, report)
+        if not failed and cfg.get("reading_enabled", True):
+            try:
+                report(pages and pages[-1] or len(pages), len(pages), "正在整合研究导航")
+                translate.finalize_reading(ws, cfg, cancel)
+            except Exception as e:  # noqa: BLE001 —— 导航失败不算翻译失败
+                translate.journal(ws, f"研究导航整合失败：{e}")
+                log.warning("研究导航整合失败 %s: %s", ws.id, e)
         minutes = max(1, round((time.time() - started) / 60))
         if failed:
             first = next(iter(failed.values()))

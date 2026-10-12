@@ -296,6 +296,154 @@ class EnrichPagesTest(unittest.TestCase):
         self.assertNotIn("highlights", self.ws.load("paper")["blocks"][0])
 
 
+class InsightsTest(unittest.TestCase):
+    def blocks(self):
+        return [{"id": "p1-1", "type": "para", "page": 1, "zh": "我们提出新方法。"},
+                {"id": "p1-2", "type": "para", "page": 1, "zh": "实验证明有效。"}]
+
+    def test_validate_insights_keeps_valid(self):
+        raw = [{"type": "problem", "content": "如何让模型更小？", "block": "p1-1", "status": "provisional"},
+               {"type": "evidence", "content": "准确率提升 2%。", "block": "p1-2", "status": "supported"}]
+        out, problems = reading.validate_insights(raw, self.blocks())
+        self.assertEqual(problems, [])
+        self.assertEqual([i["type"] for i in out], ["problem", "evidence"])
+        self.assertEqual(out[0]["page"], 1)
+
+    def test_validate_insights_drops_bad(self):
+        raw = [{"type": "huh", "content": "x", "block": "p1-1"},
+               {"type": "method", "content": "", "block": "p1-1"},
+               {"type": "method", "content": "ok", "block": "nope"},
+               {"type": "method", "content": "ok", "block": "p1-1", "status": "maybe"},
+               {"type": "method", "content": "好的", "block": "p1-1"}]
+        out, problems = reading.validate_insights(raw, self.blocks())
+        self.assertEqual(len(out), 1)
+        self.assertEqual(len(problems), 4)
+        self.assertEqual(out[0]["status"], "provisional")  # 缺省补默认
+
+    def test_merge_insights_dedups_same_content(self):
+        a = [{"type": "problem", "content": "如何让模型更小？", "block": "p1-1", "page": 1, "status": "provisional"}]
+        b = [{"type": "problem", "content": "如何让模型更小？", "block": "p2-1", "page": 2, "status": "supported"},
+             {"type": "method", "content": "提出剪枝方法。", "block": "p1-2", "page": 1, "status": "provisional"}]
+        out = reading.merge_insights(a, b)
+        self.assertEqual(len(out), 2)
+        hit = out[0]
+        self.assertEqual(hit["status"], "supported")  # 就高不就低
+        self.assertEqual(len(hit["source_refs"]), 2)  # 两处出处都留
+        self.assertTrue(hit["id"])
+
+    def test_drop_insights_on_retranslated_pages(self):
+        insights = [
+            {"id": "i1", "type": "problem", "content": "a", "page": 3, "block": "p3-1",
+             "source_refs": [{"page": 3, "block": "p3-1"}]},
+            {"id": "i2", "type": "method", "content": "b", "page": 3, "block": "p3-2",
+             "source_refs": [{"page": 3, "block": "p3-2"}, {"page": 5, "block": "p5-1"}]},
+        ]
+        out = reading.drop_insights_on_pages(insights, [3])
+        self.assertEqual([i["id"] for i in out], ["i2"])  # 全在重译页的丢，跨页的留
+
+
+class GuideTest(unittest.TestCase):
+    def paper(self, insights, done=(1, 2), analyzed=(1, 2)):
+        reading_state = {"insights": insights,
+                         "pages": {str(p): {"status": "completed"} for p in analyzed}}
+        return {"meta": {"page_count": 2}, "translation": {"done_pages": list(done)},
+                "reading": reading_state, "blocks": []}
+
+    def test_rebuild_guide_groups_and_coverage(self):
+        p = self.paper([
+            {"id": "i1", "type": "problem", "content": "a", "page": 1, "block": "p1-1"},
+            {"id": "i2", "type": "method", "content": "b", "page": 1, "block": "p1-1"},
+            {"id": "i3", "type": "problem", "content": "c", "page": 2, "block": "p2-1"},
+        ])
+        reading.rebuild_guide(p)
+        g = p["reading_guide"]
+        self.assertEqual(g["problems"], ["i1", "i3"])
+        self.assertEqual(g["methods"], ["i2"])
+        self.assertEqual(g["coverage"]["analyzed"], [1, 2])
+        self.assertEqual(g["status"], "complete")
+
+    def test_rebuild_guide_partial_when_analysis_incomplete(self):
+        p = self.paper([{"id": "i1", "type": "problem", "content": "a", "page": 1, "block": "p1-1"}],
+                       done=(1, 2), analyzed=(1,))
+        reading.rebuild_guide(p)
+        self.assertEqual(p["reading_guide"]["status"], "partial")
+        self.assertEqual(p["reading_guide"]["coverage"]["analyzed"], [1])
+
+    def test_apply_synthesis_validates_ids_and_statuses(self):
+        p = self.paper([{"id": "i1", "type": "innovation", "content": "a", "page": 1, "block": "p1-1", "status": "provisional"}])
+        relations = [{"from": "i1", "to": "i2", "content": "x"},  # i2 不存在，丢弃
+                     {"from": "i1", "to": "i1", "content": "方法支撑问题"}]
+        reading.apply_synthesis(p, "一句话总结。", relations, {"i1": "supported", "i9": "unsupported"})
+        g = p["reading_guide"]
+        self.assertEqual(g["summary"], "一句话总结。")
+        self.assertEqual(len(g["relations"]), 1)
+        self.assertEqual(p["reading"]["insights"][0]["status"], "supported")
+        self.assertTrue(g["synth_of"])
+
+
+class GuideIntegrationTest(unittest.TestCase):
+    """翻译 → insights 落库 → 全文完成后一次综合。"""
+
+    def setUp(self):
+        self.ws = make_ws(2)
+        self.cfg = {"engine": "openai", "batch_pages": 2, "concurrency": 1, "openai": {"vision": False},
+                    "reading_enabled": True}
+        for p in [mock.patch.object(translate.pdfwork, "locate", lambda root: None),
+                  mock.patch.object(translate, "tex_problems", lambda tex: [])]:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.ws.root, ignore_errors=True)
+
+    def test_translate_then_synthesize_builds_guide(self):
+        reply = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。",
+                            "highlights": [{"category": "method", "quote": "新方法", "occurrence": 0}]},
+                           {"id": "p2-1", "type": "para", "page": 2, "en": "y", "zh": "实验证明有效。"}],
+                   "insights": [{"type": "problem", "content": "如何提升效率？", "block": "p1-1", "status": "provisional"},
+                                {"type": "method", "content": "提出新方法。", "block": "p1-1", "status": "provisional"},
+                                {"type": "evidence", "content": "实验证明有效。", "block": "p2-1", "status": "supported"}]}
+        synth = {"summary": "本文提出新方法提升效率。",
+                 "relations": [{"from": "i1-xxxxxx", "to": "i2-yyyyyy", "content": "问题由方法解决"}],
+                 "checks": []}
+        calls = []
+
+        def run(cfg, prompt, cwd, images=None, cancel=None):
+            calls.append(prompt)
+            return json.dumps(synth if "研究导航" in prompt else reply)
+
+        with mock.patch.object(engines, "run", run):
+            failed = translate.translate_pages(self.ws, self.cfg, [1, 2], threading.Event(), lambda *a: None)
+            self.assertEqual(failed, {})
+            did = translate.finalize_reading(self.ws, self.cfg, None)
+
+        self.assertTrue(did)  # 做了一次模型综合
+        self.assertEqual(len([c for c in calls if "研究导航" in c]), 1)  # 只综合一次
+        paper = self.ws.load("paper")
+        self.assertEqual(len(paper["reading"]["insights"]), 3)
+        guide = paper["reading_guide"]
+        self.assertEqual(guide["status"], "complete")
+        self.assertEqual(guide["summary"], "本文提出新方法提升效率。")
+        self.assertEqual(len(guide["relations"]), 0)  # 关系引用的 id 不存在 → 程序丢弃
+        # 再收尾一次：insights 没变，不再调模型
+        with mock.patch.object(engines, "run", mock.Mock()) as run2:
+            self.assertFalse(translate.finalize_reading(self.ws, self.cfg, None))
+            run2.assert_not_called()
+
+    def test_finalize_synthesizes_partial_scope(self):
+        reply = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。"}],
+                 "insights": [{"type": "problem", "content": "如何提升效率？", "block": "p1-1", "status": "provisional"}]}
+        synth = {"summary": "范围总结。", "relations": [], "checks": []}
+        with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(reply))):
+            translate.translate_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+        with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(synth))):
+            self.assertTrue(translate.finalize_reading(self.ws, self.cfg, None))  # 选定范围（已译页）完成即综合
+        guide = self.ws.load("paper")["reading_guide"]
+        self.assertEqual(guide["status"], "complete")
+        self.assertEqual(guide["coverage"]["translated"], [1])  # 但覆盖范围如实记录：只译了 1/2 页
+        self.assertEqual(guide["summary"], "范围总结。")
+
+
 if __name__ == "__main__":
     unittest.main()
 

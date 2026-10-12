@@ -87,6 +87,7 @@
   PR.$('[data-act="deepread"]').innerHTML = PR.icon("book", "sm") + "<span>精读</span>";
   const rbtn = PR.$('[data-act="reading"]');
   if (rbtn) rbtn.innerHTML = PR.icon("marker", "sm") + "<span>标注</span>";
+  PR.$('[data-act="guide"]').innerHTML = PR.icon("compass", "sm") + "<span>导航</span>";
   /* 设置里关掉的功能：顶栏按钮也藏起来 */
   PR.applyFeatures = function () {
     const set = (sel, on) => { const el = PR.$(sel); if (el) el.style.display = on ? "" : "none"; };
@@ -110,6 +111,7 @@
     if (act === "chat") PR.toggleChat();
     if (act === "reading") PR.toggleReadingFilter && PR.toggleReadingFilter(a);
     if (act === "deepread") PR.toggleDeepRead();
+    if (act === "guide") PR.toggleGuide && PR.toggleGuide();
     if (act === "settings") { PR.renderSettings(); PR.$("#settings").classList.toggle("open"); }
     if (act === "about") PR.toggleDrawer(true, "about");
   });

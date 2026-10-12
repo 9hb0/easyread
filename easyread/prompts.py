@@ -52,6 +52,13 @@ ANNOTATION_RULES = """再给真正需要解释的块写少量精读批注——�
 - 只给有必要解释的关键概念、方法、公式、实验和局限写批注；译文已经说清楚的不写；不逐句解释；一块最多两三条，整批少而精。
 - 依据不足的写成 question 类型的疑问，不要硬下结论。批注不进入译文正文。"""
 
+INSIGHTS_RULES = """最后提取本批出现的研究要点，在 JSON 顶层输出 insights：
+  "insights": [{"type": "problem", "content": "一句话概括", "block": "本批某个块 id", "status": "provisional"}]
+- type 七选一：background 背景；related_work 相关工作；problem 研究问题；method 方法；innovation 创新；evidence 证据；limitation 局限。
+- 只提取高价值的：本批的核心研究问题、关键技术设计、实质创新点、实验结论、重要局限。一批 3 到 8 条，宁缺毋滥。
+- block 必须是本批输出里的块 id，作为原文依据；content 用一句中文说清。
+- status：provisional（暂定，默认）/ supported（本批内有直接证据）。早期页面的创新点一律 provisional，不要因为作者自称 novel 就标 supported。"""
+
 
 def _context(ws: Workspace, pages: list[int]) -> str:
     paper = ws.load("paper")
@@ -88,7 +95,7 @@ def translate(ws: Workspace, pages: list[int], engine: str, next_head: str, read
         see = f"\n先用 Read 工具看原页图 {imgs}，以原页为准核对公式、表格、上下标和阅读顺序（双栏论文按栏读）。抽取的文字只作参考。"
     elif engine == "attached":
         see = "\n附上了这几页的原页图，以原页为准核对公式、表格和阅读顺序。"
-    rules = RULES + ("\n\n" + READING_RULES + "\n\n" + ANNOTATION_RULES if reading else "")
+    rules = RULES + ("\n\n" + READING_RULES + "\n\n" + ANNOTATION_RULES + "\n\n" + INSIGHTS_RULES if reading else "")
     return (f"你在把一篇学术论文译成中文，这次只处理第 {', '.join(map(str, pages))} 页。{see}\n\n"
             f"{_context(ws, pages)}\n\n{rules}\n\n{SCHEMA}\n\n" + "\n\n".join(texts) + look)
 
@@ -110,13 +117,27 @@ def enrich(ws: Workspace, pages: list[int]) -> str:
         items = "\n".join("- " + it.get("zh", "") for it in b.get("items", [])) if b.get("items") else ""
         text = items or zh
         lines.append(f"[{b['id']}] {text}")
-    rules = READING_RULES + "\n\n" + ANNOTATION_RULES
+    rules = READING_RULES + "\n\n" + ANNOTATION_RULES + "\n\n" + INSIGHTS_RULES
     return ("下面是论文《" + (paper.get("meta", {}).get("title_zh") or paper.get("meta", {}).get("title_en") or "") + "》第 "
             + "、".join(map(str, pages)) + " 页的中文译文（按块 id）。译文已定稿，只做精读标注，不许改译文。\n\n"
             + rules + "\n\n"
             + "只输出一个 JSON 对象，不要别的文字：\n"
             + '{"blocks": [{"id": "上面列出的块 id", "highlights": [每条 {category, quote, occurrence}], "annotations": [每条 {type, anchor_quote, content, basis}]}]}\n'
-            + "只列需要标注的块；两样都没有的块不用列。\n\n译文：\n" + "\n\n".join(lines))
+            + "只列需要标注的块；两样都没有的块不用列。insights 照常在顶层输出。\n\n译文：\n" + "\n\n".join(lines))
+
+
+def synthesize(ws: Workspace) -> str:
+    """全文译完后的一次研究导航综合：浓缩 insights，建跨章节关系，核验结论。"""
+    paper = ws.load("paper")
+    insights = (paper.get("reading") or {}).get("insights") or []
+    lines = [f"[{i['id']}]（{i.get('type')}/{i.get('status')}，第 {i.get('page')} 页 {i.get('block')}）{i.get('content')}" for i in insights]
+    return ("下面是翻译《" + (paper.get("meta", {}).get("title_zh") or paper.get("meta", {}).get("title_en") or "这篇论文") +
+            "》时逐批提取的研究要点（带 id 和原文出处）。请整合成研究导航：\n\n"
+            "1. summary：一句话说清这篇论文解决什么问题、用什么方法、给出什么证据（不超过 80 字）。\n"
+            '2. relations：3 到 8 条跨章节逻辑关系，比如“研究问题 A 由方法 B 解决”“方法 B 的效果由实验 C 验证”，每条 {"from": "要点 id", "to": "要点 id", "content": "一句话"}。\n'
+            '3. checks：核验每个创新点——论文里有实验或论证直接支撑的标 supported，只声称没验证的标 provisional，找不到依据或与原文不符的标 unsupported，每条 {"insight": "要点 id", "status": "supported|provisional|unsupported"}。\n\n'
+            "只能引用上面给出的 id，不得编造要点；关系必须有依据，拿不准就不写。\n"
+            '只输出 JSON：{"summary": "", "relations": [], "checks": []}\n\n研究要点：\n' + "\n".join(lines))
 
 
 def _block_text(b: dict) -> str:
