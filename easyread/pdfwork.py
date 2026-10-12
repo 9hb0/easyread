@@ -5,27 +5,47 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
+import time
 import unicodedata
 from pathlib import Path
 
 from .store import dir_lock, write_json_atomic
+
+_pdfium_lock = threading.Lock()  # PDFium 不是线程安全的：同一进程里所有调用串行执行
+
+
+def _save_atomic(img, out: Path, fmt: str, **kw) -> None:
+    """先写临时文件再替换：中断不会留下半张坏图；Windows 上偶尔被杀毒拦一下，稍等重试。"""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    img.save(tmp, fmt, **kw)
+    for attempt in range(10):
+        try:
+            os.replace(tmp, out)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (attempt + 1))
+    os.replace(tmp, out)
 
 
 def render_pages(pdf: Path, out_dir: Path, scale: float = 2.4, quality: int = 84) -> list[dict]:
     import pypdfium2 as pdfium
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    doc = pdfium.PdfDocument(str(pdf))
-    pages = []
-    for i in range(len(doc)):
-        page = doc[i]
-        w, h = page.get_size()
-        img = page.render(scale=scale).to_pil().convert("RGB")
-        name = f"page-{i + 1:03d}.webp"
-        img.save(out_dir / name, "WEBP", quality=quality, method=5)
-        pages.append({"n": i + 1, "w": round(w, 2), "h": round(h, 2), "img": f"pages/{name}"})
-    return pages
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(str(pdf))
+        pages = []
+        for i in range(len(doc)):
+            page = doc[i]
+            w, h = page.get_size()
+            img = page.render(scale=scale).to_pil().convert("RGB")
+            name = f"page-{i + 1:03d}.webp"
+            _save_atomic(img, out_dir / name, "WEBP", quality=quality, method=5)
+            pages.append({"n": i + 1, "w": round(w, 2), "h": round(h, 2), "img": f"pages/{name}"})
+        return pages
 
 
 def extract_text(pdf: Path, out_dir: Path) -> int:
@@ -34,10 +54,11 @@ def extract_text(pdf: Path, out_dir: Path) -> int:
     import pypdfium2 as pdfium
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    doc = pdfium.PdfDocument(str(pdf))
-    for i in range(len(doc)):
-        tp = doc[i].get_textpage()
-        (out_dir / f"page-{i + 1:03d}.txt").write_text(tp.get_text_range(), encoding="utf-8")
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(str(pdf))
+        for i in range(len(doc)):
+            tp = doc[i].get_textpage()
+            (out_dir / f"page-{i + 1:03d}.txt").write_text(tp.get_text_range(), encoding="utf-8")
     with pdfplumber.open(str(pdf)) as plumb:
         for i, page in enumerate(plumb.pages):
             W, H = float(page.width), float(page.height)
@@ -53,8 +74,9 @@ def crop(root: Path, page: int, box: list[float], out_name: str, scale: float = 
     """box 是按页宽高归一化的 [x0, y0, x1, y1]；输出到 figures/，返回相对路径。"""
     import pypdfium2 as pdfium
 
-    doc = pdfium.PdfDocument(str(root / "source.pdf"))
-    img = doc[page - 1].render(scale=scale).to_pil().convert("RGB")
+    with _pdfium_lock:
+        doc = pdfium.PdfDocument(str(root / "source.pdf"))
+        img = doc[page - 1].render(scale=scale).to_pil().convert("RGB")
     W, H = img.size
     x0, y0, x1, y1 = box
     part = img.crop((int(x0 * W), int(y0 * H), int(x1 * W), int(y1 * H)))
@@ -230,12 +252,25 @@ def _fill_gaps(blocks: list[dict], layout: dict):
 
 
 def engine_image(root: Path, n: int) -> Path:
-    """给翻译模型看的原页图（JPEG，模型工具普遍支持），按需生成。"""
+    """给翻译模型看的原页图（JPEG，模型工具普遍支持），按需生成。
+
+    优先用导入时渲染好的 pages/page-XXX.webp 转 JPEG（纯 Pillow，线程安全，不开 PDFium）；
+    没有 webp 才兜底开 PDFium 渲——它不是线程安全的，走全局锁串行。
+    """
     out = root / "extract" / f"page-{n:03d}.jpg"
-    if not out.exists():
+    if out.exists():
+        return out
+    webp = root / "pages" / f"page-{n:03d}.webp"
+    if webp.is_file():
+        from PIL import Image
+        with Image.open(webp) as im:
+            _save_atomic(im.convert("RGB"), out, "JPEG", quality=82)
+        return out
+    with _pdfium_lock:
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(str(root / "source.pdf"))
-        doc[n - 1].render(scale=2.0).to_pil().convert("RGB").save(out, "JPEG", quality=82)
+        img = doc[n - 1].render(scale=2.0).to_pil().convert("RGB")
+    _save_atomic(img, out, "JPEG", quality=82)
     return out
 
 

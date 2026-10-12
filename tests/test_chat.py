@@ -152,6 +152,39 @@ class ChatContextTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIn(value, text)
 
+    def test_panel_effort_choice_reaches_api(self):
+        import urllib.request
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from easyread.library import Library
+        from easyread.server import Handler
+
+        api = ThreadingHTTPServer(("127.0.0.1", 0), FakeAPI)
+        threading.Thread(target=api.serve_forever, daemon=True).start()
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        cfg = {"openai": {}, "chat": {"default": "fake", "models": [{
+            "id": "fake", "name": "Test API", "engine": "openai", "model": "fake",
+            "base_url": f"http://127.0.0.1:{api.server_address[1]}/v1",
+        }]}}
+        app = SimpleNamespace(lib=Library(self.root.parent), token="test-token")
+        with patch.object(Handler, "app", app, create=True), patch("easyread.server.config.load", return_value=cfg):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                for payload in ({"text": "问", "anchor": "p5", "effort": "high"}, {"text": "问", "anchor": "p5"}):
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{server.server_address[1]}/api/p/{self.root.name}/chat",
+                        data=json.dumps(payload).encode(),
+                        headers={"Content-Type": "application/json", "X-Token": "test-token"}, method="POST")
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        [json.loads(line) for line in response]
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertEqual(api.bodies[0].get("reasoning_effort"), "high")  # 面板里选的推理强度传到接口
+        self.assertNotIn("reasoning_effort", api.bodies[1])              # 没选就不带这个参数，走模型配置
+
 
 class ChatStreamTest(unittest.TestCase):
     def test_openai_stream_strips_think(self):

@@ -1,6 +1,6 @@
 /* 右侧“问 AI”面板：边读边和模型实时对话，回答逐字流出来。
    - 多个对话：顶部点标题展开对话列表，可以新建、切换、改名、删除（存在论文目录的 chat.json）。
-   - 模型：输入框左下角切换，名单在“设置 → 问 AI”里配（默认 Claude Opus 5.5 / Sonnet 5.5 / GPT）。
+   - 模型：输入框左下角切换，名单在“设置 → 问 AI”里配（默认 Claude Opus 5.5 / Sonnet 5.5 / GPT）；模型右边可临时调推理强度，只影响当前对话。
    - 上下文：后台附上整篇论文文字和参考文献，正在读的段落是提问重点；可以引用多段——选中文字点“问 AI”、段落操作条的“问 AI”，
      或者把选中的文字直接拖进输入框，每段一个小标签，可以逐个去掉。
    - 你的划线、笔记、问题不会每次都带；问到“标红的”“划线”“我的笔记”时，后台才把对应颜色的标记找出来。
@@ -9,7 +9,7 @@
   "use strict";
   const S = PR.state;
   const panel = () => PR.$("#chatpanel");
-  const st = { loaded: false, threads: [], cur: null, models: [], def: "", model: "", listOpen: false, menuOpen: false, refs: [], auto: null, noAuto: false, streaming: null, draft: "" };
+  const st = { loaded: false, threads: [], cur: null, models: [], def: "", model: "", effort: "", listOpen: false, menuOpen: false, refs: [], auto: null, noAuto: false, streaming: null, draft: "" };
 
   PR.canChat = () => PR.store.mode === "server";
   /* 在线演示 / 离线版：带着对话记录时可以看，不能问 */
@@ -57,7 +57,9 @@
     try {
       const d = await PR.api("/api/p/" + PR.pid + "/chat");
       st.threads = d.threads || []; st.models = d.models || []; st.def = d.default;
+      const wasModel = st.model;
       if (!st.model || !st.models.some((m) => m.id === st.model)) st.model = st.def;
+      if (st.model !== wasModel) syncEffort();
       if (st.cur && !st.threads.some((t) => t.id === st.cur)) st.cur = null;
       st.loaded = true;
     } catch (e) { PR.toast("读不到对话记录：" + PR.esc(e.message)); }
@@ -66,6 +68,9 @@
 
   const thread = () => st.threads.find((t) => t.id === st.cur) || null;
   const modelOf = (id) => st.models.find((m) => m.id === id) || st.models[0] || { label: "模型" };
+  const EFFORTS = [["", "默认"], ["low", "低"], ["medium", "中"], ["high", "高"], ["xhigh", "超高"], ["max", "最大"]];
+  /* 换模型时推理强度跟着换成它配置里的值；在面板里改的只影响当前对话 */
+  const syncEffort = () => { st.effort = (modelOf(st.model) || {}).reasoning_effort || ""; };
 
   function plainTex(t) {
     return (t || "").replace(/\$\$?([^$]*)\$\$?/g, (m, x) => x.replace(/\\([a-zA-Z]+)\s*/g, (y, name) => ({ mu: "μ", sigma: "σ", epsilon: "ε", alpha: "α", beta: "β", theta: "θ", pi: "π", sum: "Σ", mid: "|", succ: "≻", log: "log ", exp: "exp " })[name] || "").replace(/[{}\\^_]/g, ""));
@@ -134,10 +139,12 @@
     const menu = st.menuOpen ? '<div class="ch-menu">' + st.models.map((x) => '<button data-c="model" data-m="' + PR.esc(x.id) + '" class="' + (x.id === st.model ? "on" : "") + '"' + (x.ready === false ? ' disabled title="' + PR.esc(x.hint) + '"' : "") + ">" +
       "<b>" + PR.esc(x.label) + "</b><small>" + PR.esc(x.ready === false ? x.hint : [x.source, x.id === st.def ? "默认" : ""].filter(Boolean).join(" · ")) + "</small></button>").join("") +
       '<hr><button data-c="manage">' + PR.icon("gear", "sm") + "管理模型…</button></div>" : "";
+    const effortSel = '<select class="ch-effort" data-c="effort" title="推理强度">' +
+      EFFORTS.map(([v, l]) => '<option value="' + v + '"' + (v === (st.effort || "") ? " selected" : "") + ">" + l + "</option>").join("") + "</select>";
     return '<div class="ch-compose">' + (chips ? '<div class="ch-chips">' + chips + "</div>" : "") +
       (st.refs.length < 2 && !st.streaming ? '<div class="ch-tip">想一起问几段？把正文里选中的文字拖进来，或点段落上的“问 AI”</div>' : "") +
       '<textarea id="chatInput" rows="1" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）">' + PR.esc(st.draft) + "</textarea>" +
-      '<div class="ch-bar"><button class="ch-model" data-c="menu" title="换模型">' + PR.esc(m.label) + PR.icon("chevron", "sm") + "</button>" + menu +
+      '<div class="ch-bar"><button class="ch-model" data-c="menu" title="换模型">' + PR.esc(m.label) + PR.icon("chevron", "sm") + "</button>" + menu + effortSel +
       '<span class="grow"></span>' + (st.streaming ? '<button class="ch-send stop" data-c="stop" title="停止">' + PR.icon("stop", "sm") + "</button>"
         : '<button class="ch-send" data-c="send" title="发送（Enter）">' + PR.icon("arrowUp", "sm") + "</button>") + "</div></div>";
   }
@@ -183,7 +190,7 @@
     try {
       const res = await fetch("/api/p/" + PR.pid + "/chat", {
         method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json", "X-Token": PR.token || "" },
-        body: JSON.stringify({ thread: t.id, text, anchor: user.anchor, quote: user.quote, refs, note: noteId || null, model: st.model }),
+        body: JSON.stringify({ thread: t.id, text, anchor: user.anchor, quote: user.quote, refs, note: noteId || null, model: st.model, effort: st.effort }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "HTTP " + res.status);
       const reader = res.body.getReader(), dec = new TextDecoder();
@@ -224,10 +231,11 @@
     const row = b.closest(".ch-thread[data-t]");
     if (c === "close") return PR.toggleChat(false);
     if (c === "list") { st.listOpen = !st.listOpen; st.menuOpen = false; return render(); }
-    if (c === "new") { if (st.streaming) return; st.cur = null; st.listOpen = false; st.model = st.def; st.refs = []; st.noAuto = false; autoContext(); render(); return focusInput(); }
+    if (c === "new") { if (st.streaming) return; st.cur = null; st.listOpen = false; st.model = st.def; syncEffort(); st.refs = []; st.noAuto = false; autoContext(); render(); return focusInput(); }
     if (c === "menu") { st.menuOpen = !st.menuOpen; st.listOpen = false; return render(); }
-    if (c === "model") { st.model = b.dataset.m; st.menuOpen = false; return render(); }
+    if (c === "model") { st.model = b.dataset.m; syncEffort(); st.menuOpen = false; return render(); }
     if (c === "manage") { st.menuOpen = false; render(); return PR.openSettings("chat"); }
+    if (c === "effort") { st.menuOpen = false; const el = panel().querySelector(".ch-menu"); if (el) el.remove(); return; }  // 只摘掉菜单节点：整块重画会换掉 select，原生下拉就展不开了
     if (c === "send") return send(PR.$("#chatInput").value);
     if (c === "stop" && st.streaming) return st.streaming.ctrl.abort();
     if (c === "suggest") return send(b.textContent);
@@ -263,7 +271,7 @@
     if (!row || e.target.closest("[data-c]")) return;
     st.cur = row.dataset.t; st.listOpen = false;
     const t = thread();
-    if (t && t.model && st.models.some((m) => m.id === t.model)) st.model = t.model;
+    if (t && t.model && st.models.some((m) => m.id === t.model) && t.model !== st.model) { st.model = t.model; syncEffort(); }
     render();
   });
   document.addEventListener("keydown", (e) => {
@@ -271,6 +279,7 @@
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(e.target.value); }
     if (e.key === "Escape") e.target.blur();
   });
+  document.addEventListener("change", (e) => { if (e.target.classList && e.target.classList.contains("ch-effort")) st.effort = e.target.value; });
   document.addEventListener("input", (e) => { if (e.target.id === "chatInput") PR.autosize(e.target); });
   /* 把正文里选中的文字拖进问 AI 面板：变成一段引用，而不是一堆粘进来的字 */
   let dragRef = null;

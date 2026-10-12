@@ -23,11 +23,16 @@ def now_iso() -> str:
 
 
 def read_json(path: Path, default=None):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return default
+    for attempt in range(5):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+        except PermissionError:  # Windows：杀毒/同步软件偶尔短暂锁住刚写完的文件
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def write_json_atomic(path: Path, data) -> None:

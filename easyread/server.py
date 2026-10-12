@@ -82,6 +82,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("问题是空的")
         cfg = config.load()
         ecfg, m = chat_models.engine_cfg(cfg, body.get("model"))
+        effort = body.get("effort")
+        if effort is not None and str(effort) in ("", "low", "medium", "high", "xhigh", "max"):
+            ecfg[ecfg["engine"]]["reasoning_effort"] = str(effort)  # 面板里临时选的推理强度，优先于模型配置
         model = chat_models.label(m)
         thread = chat_store.get(ws, body.get("thread"))
         tid = thread["id"] if thread else chat_store.new_id()
