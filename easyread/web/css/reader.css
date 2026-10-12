@@ -203,6 +203,14 @@ mark.sem:hover { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 30%,
 .dot.cat-evidence { background: var(--sem-evidence); }
 .rf-btns { display: flex; gap: 8px; padding: 8px 4px 2px; }
 .rf-pop { padding: 4px 2px; color: var(--ink-2); }
+
+/* 精读批注页边卡片（随翻译生成，与 AI 讨论、我的笔记区分） */
+.card.reading { border-left: 3px solid #8B7EC8; }
+.card.reading .lbl span:first-child { color: #8B7EC8; }
+.rf-ann { padding: 6px 2px 2px; border-top: 1px solid var(--rule); font-size: .92em; }
+.rf-ann .t { display: inline-block; margin-right: 6px; color: #8B7EC8; font-size: .9em; }
+.rf-ann .q { color: var(--ink-3); font-size: .9em; }
+.rf-ann-more { padding: 4px 2px; color: var(--ink-3); font-size: .88em; }
 code { font: .86em var(--mono); background: var(--accent-soft); padding: .1em .3em; border-radius: 3px; }
 
 .edited-dot { position: absolute; top: .72em; left: -24px; width: 5px; height: 5px; border-radius: 50%; background: var(--mine); opacity: .8; }

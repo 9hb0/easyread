@@ -16,6 +16,13 @@
   ];
   const CAT = Object.fromEntries(PR.READING_CATS);
   PR.readingCatName = (id) => CAT[id] || "";
+  PR.READING_ANN_TYPES = {
+    concept: "概念", method_explanation: "方法解释", design_rationale: "设计动机", formula: "公式",
+    experiment: "实验", limitation: "局限", question: "疑问",
+  };
+  PR.READING_ANN_BASES = {
+    author_statement: "作者陈述", source_supported: "有原文依据", ai_explanation: "AI 解释",
+  };
 
   PR.readingFilter = PR.ls.get("pr-reading-filter", { off: false, only: "" });
 
@@ -107,9 +114,12 @@
     const rows = PR.READING_CATS.map(([id, zh]) =>
       '<button class="rf-row' + (PR.readingFilter.only === id ? " on" : "") + '" data-cat="' + id + '">' +
       '<i class="dot cat-' + id + '"></i><span>' + zh + '</span><b>' + (c[id] || 0) + "</b></button>").join("");
+    const need = pagesNeeding();
     PR.popover(anchor, '<div class="hd">语义高亮</div><div class="rf-list">' + rows + "</div>" +
       '<div class="rf-btns"><button class="btn sm line" data-f="all">显示全部</button>' +
-      '<button class="btn sm line" data-f="off">' + (PR.readingFilter.off ? "开启高亮" : "关闭高亮") + "</button></div>", { sticky: true });
+      '<button class="btn sm line" data-f="off">' + (PR.readingFilter.off ? "开启高亮" : "关闭高亮") + "</button>" +
+      (PR.store.mode === "server" && need.length ? '<button class="btn sm line" data-f="enrich">补精读 ' + need.length + " 页</button>" : "") +
+      "</div>", { sticky: true });
     PR.$("#popover").onclick = (ev) => {
       const row = ev.target.closest("[data-cat]");
       if (row) {
@@ -120,11 +130,31 @@
       }
       const b = ev.target.closest("[data-f]");
       if (!b) return;
+      if (b.dataset.f === "enrich") { PR.hidePopover(); runEnrich(); return; }
       if (b.dataset.f === "all") PR.saveReadingFilter({ only: "", off: false });
       else PR.saveReadingFilter({ only: "", off: !PR.readingFilter.off });
       PR.hidePopover();
     };
   };
+
+  function pagesNeeding() {
+    const p = S.paper || {};
+    const done = (p.translation || {}).done_pages || [];
+    const st = (p.reading || {}).pages || {};
+    return done.filter((n) => {
+      const s = (st[n] || {}).status;
+      return !s || ["failed", "stale", "pending"].includes(s);
+    });
+  }
+
+  async function runEnrich() {
+    try {
+      await PR.api("/api/p/" + PR.pid + "/enrich", { method: "POST", body: {} });
+      PR.toast("精读补处理已排队，完成后自动显示");
+    } catch (err) {
+      PR.toast("排队失败：" + PR.esc(err.message));
+    }
+  }
 
   /* ---------- 点高亮：看类别 ---------- */
   document.addEventListener("click", (e) => {
@@ -133,8 +163,16 @@
     e.stopPropagation();
     const name = CAT[m.dataset.cat] || "";
     const only = PR.readingFilter.only;
+    const blk = m.closest(".blk");
+    const b = blk && PR.blockById[blk.dataset.id];
+    const anns = (b && b.annotations) || [];
+    const annHtml = anns.slice(0, 2).map((a) =>
+      '<div class="rf-ann"><span class="t">' + PR.esc((PR.READING_ANN_TYPES || {})[a.type] || a.type || "批注") + "</span>" +
+      (a.anchor_quote ? '<span class="q">「' + PR.esc(a.anchor_quote) + "」</span>" : "") +
+      "<div>" + PR.mdBlocks(a.content) + "</div></div>").join("") +
+      (anns.length > 2 ? '<div class="rf-ann-more">…共 ' + anns.length + " 条批注，见页边卡片</div>" : "");
     PR.popover(m, '<div class="hd"><i class="dot cat-' + m.dataset.cat + '"></i>' + PR.esc(name) + "</div>" +
-      '<div class="rf-pop">AI 精读把这句标为「' + PR.esc(name) + '」。</div>' +
+      '<div class="rf-pop">AI 精读把这句标为「' + PR.esc(name) + '」。</div>' + annHtml +
       '<div class="rf-btns"><button class="btn sm line" data-f="only">' + (only === m.dataset.cat ? "取消只看" : "只看此类") + "</button></div>", { sticky: true });
     PR.$("#popover").onclick = (ev) => {
       const b = ev.target.closest("[data-f]");

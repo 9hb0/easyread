@@ -155,6 +155,9 @@ class Jobs:
                     deepread.set_state(ws, state="running", message="模型思考中", error="")
                     deepread.generate(ws, cfg, None)
                     obsidian.auto_sync(ws, cfg)
+                elif job["kind"] == "enrich":  # 只补精读：不动译文
+                    translate.enrich_pages(ws, cfg, job.get("pages"), None,
+                                            lambda d, t, m: job.update(message=m))
                 job["state"], job["message"] = "done", "完成"
             except Exception as e:  # noqa: BLE001
                 job["state"], job["message"] = "error", str(e)[:500]

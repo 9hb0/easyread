@@ -6,6 +6,7 @@ const readerHtml = fs.readFileSync(path.join(root, "easyread/web/reader.html"), 
 const readingJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/reading.js"), "utf8");
 const anchorJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/anchor.js"), "utf8");
 const panelsJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/panels.js"), "utf8");
+const marginJs = fs.readFileSync(path.join(root, "easyread/web/js/reader/margin.js"), "utf8");
 const baseCss = fs.readFileSync(path.join(root, "easyread/web/css/base.css"), "utf8");
 const readerCss = fs.readFileSync(path.join(root, "easyread/web/css/reader.css"), "utf8");
 
@@ -20,10 +21,15 @@ check(readingJs.includes("PR.applyReadingMarks") && readingJs.includes("PR.toggl
 check(readingJs.includes("mark.sem"), "semantic marks must use the sem class");
 check(anchorJs.includes("PR.textNodesIn"), "anchor.js must export the text-node walker for reuse");
 check(panelsJs.includes('act === "reading"'), "toolbar click must open the reading filter");
+check(marginJs.includes('src === "reading"'), "margin must render reading annotation cards");
+check(marginJs.includes("card reading"), "reading cards must use the reading card class");
+check(readingJs.includes("READING_ANN_TYPES") && readingJs.includes("runEnrich"), "reading.js must label annotation types and offer enrich");
+check(readingJs.includes("/enrich"), "reading.js must call the enrich API");
 for (const cat of ["background", "related_work", "problem", "method", "innovation", "evidence"]) {
   check(baseCss.includes("--sem-" + cat + ":"), "base.css must define --sem-" + cat);
   check(readerCss.includes("mark.sem.cat-" + cat), "reader.css must style mark.sem.cat-" + cat);
   check(readerCss.includes(".dot.cat-" + cat), "reader.css must style the ." + cat + " filter dot");
 }
+check(readerCss.includes(".card.reading"), "reader.css must style reading annotation cards");
 console.log("reading UI checks passed");
 

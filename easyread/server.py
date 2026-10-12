@@ -363,6 +363,13 @@ class Handler(BaseHTTPRequestHandler):
                     pages = sorted(int(k) for k in ((ws.load("job") or {}).get("failed") or {})) or None
                 app.jobs.enqueue(ws, pages=pages, translate_after=True, scope=body.get("scope"))
                 return self._json(200, {"ok": True})
+            if action == "enrich":  # 只补精读：不重译，给已译页面补高亮和批注
+                pages = None
+                if body.get("all"):
+                    pages = sorted(set(ws.load("paper").get("translation", {}).get("done_pages", [])))
+                elif body.get("pages"):
+                    pages = paperdata.parse_pages(body["pages"])
+                return self._json(200, app.jobs.submit_small("enrich", ws.id, pages=pages))
             if action == "reveal":  # 在资源管理器 / 访达里打开这篇的文件夹
                 _reveal(ws.root)
                 return self._json(200, {"ok": True})

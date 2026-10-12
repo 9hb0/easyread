@@ -20,6 +20,22 @@ CATEGORIES = {
     "evidence": "论据实验",
 }
 
+ANNOTATION_TYPES = {
+    "concept": "概念",
+    "method_explanation": "方法解释",
+    "design_rationale": "设计动机",
+    "formula": "公式",
+    "experiment": "实验",
+    "limitation": "局限",
+    "question": "疑问",
+}
+
+BASES = {
+    "author_statement": "作者陈述",
+    "source_supported": "有原文依据",
+    "ai_explanation": "AI 解释",
+}
+
 
 def block_zh(block: dict) -> str:
     """一个块参与高亮定位的中文文本（段落/标题/列表项/题注，公式和单元格不算）。"""
@@ -100,12 +116,87 @@ def validate_highlights(blocks: list[dict]) -> list[str]:
     return problems
 
 
-def apply_reading_state(paper: dict, pages: list[int], status: str, enabled: bool) -> None:
-    """翻译批次落库时更新页面级精读状态（在 paper.json 的同一次写里调用）。"""
+def validate_annotations(blocks: list[dict]) -> list[str]:
+    """校验并就地规范化每个块的 annotations（精读批注）。
+    anchor_quote 为空表示挂整块；不为空时必须能在该块译文中定位（首次出现）。
+    模型给的 id 等自由字段一律不信，id 由这里确定性生成。"""
+    problems: list[str] = []
+    for b in blocks:
+        raw = b.get("annotations")
+        if raw is None:
+            continue
+        bid = b.get("id") or "?"
+        if not isinstance(raw, list):
+            problems.append(f"{bid}：annotations 不是数组")
+            b.pop("annotations", None)
+            continue
+        text = block_zh(b)
+        kept: list[dict] = []
+        for a in raw:
+            if not isinstance(a, dict):
+                problems.append(f"{bid}：批注不是对象：{str(a)[:60]}")
+                continue
+            typ = a.get("type")
+            if typ not in ANNOTATION_TYPES:
+                problems.append(f"{bid}：批注类别不合法：{str(typ)[:40]}")
+                continue
+            content = str(a.get("content") or "").strip()
+            if not content or len(content) > 600:
+                problems.append(f"{bid}：批注内容为空或超长")
+                continue
+            basis = a.get("basis") or "ai_explanation"
+            if basis not in BASES:
+                problems.append(f"{bid}：批注依据不合法：{str(basis)[:40]}")
+                continue
+            quote = str(a.get("anchor_quote") or "")
+            if quote and (not text or locate_quote(text, quote, 0) is None):
+                problems.append(f"{bid}：批注锚点无法定位：{quote[:40]}")
+                continue
+            ann = {"id": f"a-{bid}-{len(kept)}", "type": typ, "content": content, "basis": basis}
+            if quote:
+                ann["anchor_quote"] = quote
+            kept.append(ann)
+        if kept:
+            b["annotations"] = kept
+        else:
+            b.pop("annotations", None)
+    return problems
+
+
+def validate_reading(blocks: list[dict]) -> list[str]:
+    """一次校验高亮 + 批注（翻译批次和补精读共用）。"""
+    return validate_highlights(blocks) + validate_annotations(blocks)
+
+
+def reading_pages(blocks: list[dict]) -> set[int]:
+    """有精读标注（高亮或批注）的页码集合。"""
+    return {b.get("page") for b in blocks if b.get("highlights") or b.get("annotations")}
+
+
+def pages_needing_reading(paper: dict, only_missing: bool = True) -> list[int]:
+    """已翻译但缺精读的页：没记过状态、failed、stale；only_missing=False 时全部已译页都要。"""
+    done = sorted({int(p) for p in paper.get("translation", {}).get("done_pages", [])})
+    states = (paper.get("reading") or {}).get("pages") or {}
+    out = []
+    for p in done:
+        status = (states.get(str(p)) or {}).get("status")
+        if not status or status in ("failed", "stale", "pending"):
+            out.append(p)
+        elif not only_missing:
+            out.append(p)
+    return out
+
+
+def apply_reading_state(paper: dict, pages: list[int], status, enabled: bool) -> None:
+    """翻译批次落库时更新页面级精读状态（在 paper.json 的同一次写里调用）。
+    status 可以是统一字符串，也可以是 {页码: 状态}。"""
     reading = paper.setdefault("reading", {})
     reading["version"] = READING_VERSION
     reading["enabled"] = enabled
     states = reading.setdefault("pages", {})
     blocks = paper.get("blocks", [])
     for p in pages:
-        states[str(p)] = {"status": status, "zh_hash": page_hash(blocks, p)}
+        st = status.get(p, status) if isinstance(status, dict) else status
+        hl = sum(len(b.get("highlights") or []) for b in blocks if b.get("page") == p)
+        ann = sum(len(b.get("annotations") or []) for b in blocks if b.get("page") == p)
+        states[str(p)] = {"status": st, "zh_hash": page_hash(blocks, p), "highlights": hl, "annotations": ann}

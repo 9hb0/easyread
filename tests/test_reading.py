@@ -137,6 +137,15 @@ class ReadingStateTest(unittest.TestCase):
         self.assertNotIn("highlights", b)
         shutil.rmtree(ws.root, ignore_errors=True)
 
+    def test_retranslated_block_marks_page_stale(self):
+        ws = make_ws()
+        merge_blocks(ws, {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "zh": "旧译文",
+                                      "highlights": [{"id": "h", "category": "method", "quote": "旧译文", "occurrence": 0}]}]},
+                    reading={"pages": [1], "status": "completed", "enabled": True})
+        set_block_text(ws, "p1-1", "全新的译文")
+        self.assertEqual(ws.load("paper")["reading"]["pages"]["1"]["status"], "stale")
+        shutil.rmtree(ws.root, ignore_errors=True)
+
     def test_old_paper_without_reading_fields_loads(self):
         ws = make_ws()
         self.assertNotIn("reading", ws.load("paper"))
@@ -188,7 +197,7 @@ class TranslateIntegrationTest(unittest.TestCase):
         self.assertEqual(failed, {})
         paper = self.ws.load("paper")
         self.assertNotIn("highlights", paper["blocks"][0])
-        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "completed")
+        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "failed")  # 精读坏了，但译文保住
 
     def test_reading_off_means_pure_translation(self):
         ok = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。"}]}
@@ -201,6 +210,90 @@ class TranslateIntegrationTest(unittest.TestCase):
         ok = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。"}]}
         _, prompts_seen = self._run(ok, reading_enabled=True)
         self.assertIn("语义高亮", prompts_seen[0])
+
+    def test_annotations_saved_with_translation(self):
+        ok = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。",
+                          "highlights": [{"category": "method", "quote": "新方法", "occurrence": 0}],
+                          "annotations": [{"type": "concept", "anchor_quote": "新方法", "content": "这里的方法指……",
+                                           "basis": "author_statement"}]}]}
+        failed, _ = self._run(ok)
+        self.assertEqual(failed, {})
+        paper = self.ws.load("paper")
+        ann = paper["blocks"][0]["annotations"][0]
+        self.assertEqual(ann["type"], "concept")
+        self.assertEqual(ann["basis"], "author_statement")
+        self.assertEqual(ann["id"], "a-p1-1-0")
+        self.assertEqual(paper["reading"]["pages"]["1"]["annotations"], 1)
+
+    def test_bad_annotations_dropped_page_failed(self):
+        bad = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。",
+                           "annotations": [{"type": "nope", "content": "x"},
+                                          {"type": "concept", "anchor_quote": "找不到的锚点", "content": "y"}]}]}
+        failed, _ = self._run(bad)
+        self.assertEqual(failed, {})
+        paper = self.ws.load("paper")
+        self.assertNotIn("annotations", paper["blocks"][0])
+        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "failed")
+
+
+class EnrichPagesTest(unittest.TestCase):
+    def setUp(self):
+        self.ws = make_ws(2)
+        self.cfg = {"engine": "openai", "batch_pages": 2, "concurrency": 1, "openai": {"vision": False},
+                    "reading_enabled": True}
+        merge_blocks(self.ws, {"blocks": [
+            {"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。"},
+            {"id": "p2-1", "type": "para", "page": 2, "en": "y", "zh": "实验证明有效。"}]}, done=[1, 2])
+        self.patches = [mock.patch.object(translate.pdfwork, "locate", lambda root: None),
+                        mock.patch.object(translate, "tex_problems", lambda tex: [])]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        shutil.rmtree(self.ws.root, ignore_errors=True)
+
+    def test_pages_needing_reading_picks_missing_and_failed(self):
+        from easyread import reading
+        paper = self.ws.load("paper")
+        self.assertEqual(reading.pages_needing_reading(paper), [1, 2])  # 老论文没有 reading 字段：全缺
+        self.ws.update("paper", lambda p: (reading.apply_reading_state(p, [1], "completed", True),
+                                           reading.apply_reading_state(p, [2], "failed", True)))
+        self.assertEqual(reading.pages_needing_reading(self.ws.load("paper")), [2])
+
+    def test_enrich_writes_annotations_without_touching_translation(self):
+        reply = {"blocks": [{"id": "p1-1", "highlights": [{"category": "method", "quote": "新方法", "occurrence": 0}],
+                             "annotations": [{"type": "concept", "anchor_quote": "新方法", "content": "指文中的机制。",
+                                              "basis": "source_supported"}]}]}
+        with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(reply))):
+            failed = translate.enrich_pages(self.ws, self.cfg, None, threading.Event(), lambda *a: None)
+        self.assertEqual(failed, {})
+        paper = self.ws.load("paper")
+        b = paper["blocks"][0]
+        self.assertEqual(b["zh"], "我们提出新方法。")  # 译文没动
+        self.assertEqual(b["highlights"][0]["category"], "method")
+        self.assertEqual(b["annotations"][0]["type"], "concept")
+        self.assertEqual(paper["reading"]["pages"]["1"]["status"], "completed")
+
+    def test_enrich_skips_when_reading_disabled(self):
+        with mock.patch.object(engines, "run", mock.Mock()) as run:
+            failed = translate.enrich_pages(self.ws, dict(self.cfg, reading_enabled=False), None, None, lambda *a: None)
+        self.assertEqual(failed, {})
+        run.assert_not_called()
+
+    def test_enrich_failure_records_pages(self):
+        with mock.patch.object(engines, "run", mock.Mock(side_effect=engines.EngineError("boom"))):
+            failed = translate.enrich_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+        self.assertEqual(list(failed), [1])
+        self.assertIn("补精读第 [1] 页失败", (self.ws.root / "job.log").read_text(encoding="utf-8"))
+
+    def test_enrich_ignores_unknown_blocks(self):
+        reply = {"blocks": [{"id": "nope", "highlights": [{"category": "method", "quote": "x", "occurrence": 0}]}]}
+        with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(reply))):
+            failed = translate.enrich_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+        self.assertEqual(failed, {})
+        self.assertNotIn("highlights", self.ws.load("paper")["blocks"][0])
 
 
 if __name__ == "__main__":

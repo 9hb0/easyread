@@ -71,7 +71,8 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, readi
             tr.update(data["translation"])
         if reading:
             reading_mod.apply_reading_state(paper, parse_pages(reading.get("pages") or []),
-                                             reading.get("status") or "completed", bool(reading.get("enabled", True)))
+                                             reading.get("statuses") or reading.get("status") or "completed",
+                                             bool(reading.get("enabled", True)))
         if done:
             tr["done_pages"] = sorted(set(tr.get("done_pages", [])) | set(parse_pages(done)))
             total = paper.get("meta", {}).get("page_count") or 0
@@ -142,6 +143,10 @@ def set_block_text(ws: Workspace, key: str, zh: str) -> None:
             else:
                 b["zh"] = zh
             b.pop("highlights", None)
+            b.pop("annotations", None)
+            page = b.get("page")
+            if page and (paper.get("reading", {}).get("pages", {}).get(str(page)) or {}).get("status"):
+                paper["reading"]["pages"][str(page)]["status"] = "stale"  # 该页精读标注已失效
             return
         raise KeyError(key)
     ws.update("paper", apply)

@@ -28,12 +28,25 @@
       const host = e.reply_to && noteById[e.reply_to];
       push(PR.anchorOfEntry(e), { src: "agent", t: host ? (host.created || "") + "~" + (e.at || "") : e.at || "", data: e });
     }
+    for (const b of S.paper.blocks || []) {  // AI 精读批注（随翻译生成，存在 paper.json 的块上）
+      (b.annotations || []).forEach((a, i) => {
+        push(anchorOf(b.id), { src: "reading", t: String(PR.order[b.id] ?? 0).padStart(6, "0") + "#" + i, data: Object.assign({ block: b.id }, a) });
+      });
+    }
     for (const list of Object.values(groups)) list.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
     return groups;
   }
 
   function cardHtml(item, editingId) {
     const d = item.data;
+    if (item.src === "reading") {
+      const t = (PR.READING_ANN_TYPES || {})[d.type] || d.type || "批注";
+      const basis = (PR.READING_ANN_BASES || {})[d.basis] || "";
+      return '<div class="card reading" data-ann="' + PR.esc(d.id) + '" data-anchor="' + PR.esc(item.anchor) + '">' +
+        '<div class="lbl"><span>精读批注 · ' + PR.esc(t) + '</span><span class="meta">' + PR.esc(basis) + "</span></div>" +
+        (d.anchor_quote ? '<div class="quote">「' + PR.md(d.anchor_quote, { cite: false, xref: false }) + "」</div>" : "") +
+        '<div class="body">' + PR.mdBlocks(d.content) + "</div></div>";
+    }
     if (item.src === "agent") {
       return '<div class="card agent' + (d.kind === "check" ? " check" : "") + '" data-card="' + PR.esc(d.id) + '" data-anchor="' + PR.esc(item.anchor) + '">' +
         '<div class="lbl"><span>' + (KIND_LABEL[d.kind] || "AI") + '</span><span class="meta">' + PR.shortTime(d.updated || d.at) + "</span></div>" +
@@ -243,6 +256,7 @@
   PR.cardClick = function (e, inPanel) {
     const card = e.target.closest(".card");
     if (!card) return false;
+    if (card.dataset.ann && e.target.closest(".body, .quote")) { PR.jumpTo("b-" + card.dataset.anchor); return true; }
     const a = e.target.closest("[data-a]"), k = e.target.closest("[data-k]"), col = e.target.closest("[data-color]");
     const nid = card.dataset.note;
     const rerender = () => (inPanel ? PR.renderNotesPanel(nid) : PR.openNoteEditor(nid));

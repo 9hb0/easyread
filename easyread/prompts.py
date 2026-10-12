@@ -45,6 +45,13 @@ READING_RULES = """精读任务（和翻译一起完成）：
 - 同一块内的高亮不要互相重叠；相关工作里的技术不是 innovation；作者声称的效果不等于 evidence；不要因为出现 novel/propose/significant 这类词就标创新或证据。
 - 段落、标题、列表项、表格和图的中文题注都可以加 highlights；公式块不加。不得为了高亮改译文措辞。"""
 
+ANNOTATION_RULES = """再给真正需要解释的块写少量精读批注——在该块上加 annotations 字段：
+  "annotations": [{"type": "concept", "anchor_quote": "该块 zh 译文里的连续原话（留空则挂整块）", "content": "一到三句话的批注", "basis": "author_statement"}]
+- type 七选一：concept 概念解释；method_explanation 方法怎么工作；design_rationale 为什么这样设计；formula 公式含义；experiment 实验说明；limitation 局限或前提；question 拿不准的疑点。
+- basis 三选一：author_statement 作者明确说过；source_supported 论文里有依据的推断；ai_explanation 你补充的背景知识。不得把你的推断说成作者原意。
+- 只给有必要解释的关键概念、方法、公式、实验和局限写批注；译文已经说清楚的不写；不逐句解释；一块最多两三条，整批少而精。
+- 依据不足的写成 question 类型的疑问，不要硬下结论。批注不进入译文正文。"""
+
 
 def _context(ws: Workspace, pages: list[int]) -> str:
     paper = ws.load("paper")
@@ -81,7 +88,7 @@ def translate(ws: Workspace, pages: list[int], engine: str, next_head: str, read
         see = f"\n先用 Read 工具看原页图 {imgs}，以原页为准核对公式、表格、上下标和阅读顺序（双栏论文按栏读）。抽取的文字只作参考。"
     elif engine == "attached":
         see = "\n附上了这几页的原页图，以原页为准核对公式、表格和阅读顺序。"
-    rules = RULES + ("\n\n" + READING_RULES if reading else "")
+    rules = RULES + ("\n\n" + READING_RULES + "\n\n" + ANNOTATION_RULES if reading else "")
     return (f"你在把一篇学术论文译成中文，这次只处理第 {', '.join(map(str, pages))} 页。{see}\n\n"
             f"{_context(ws, pages)}\n\n{rules}\n\n{SCHEMA}\n\n" + "\n\n".join(texts) + look)
 
@@ -89,6 +96,27 @@ def translate(ws: Workspace, pages: list[int], engine: str, next_head: str, read
 def repair(original_json: str, problems: list[str]) -> str:
     return ("下面这份论文翻译 JSON 有问题，请修好后输出完整的 JSON（格式不变，只输出 JSON）：\n"
             + "\n".join(f"- {p}" for p in problems[:30]) + "\n\nJSON：\n" + original_json)
+
+
+def enrich(ws: Workspace, pages: list[int]) -> str:
+    """已翻译页面的“仅补精读”：给模型看现有译文，只要精读标注，不许改译文。"""
+    paper = ws.load("paper")
+    targets = [b for b in paper.get("blocks", []) if b.get("page") in pages]
+    lines = []
+    for b in targets:
+        zh = b.get("zh") or b.get("caption_zh") or ""
+        if not zh:
+            continue
+        items = "\n".join("- " + it.get("zh", "") for it in b.get("items", [])) if b.get("items") else ""
+        text = items or zh
+        lines.append(f"[{b['id']}] {text}")
+    rules = READING_RULES + "\n\n" + ANNOTATION_RULES
+    return ("下面是论文《" + (paper.get("meta", {}).get("title_zh") or paper.get("meta", {}).get("title_en") or "") + "》第 "
+            + "、".join(map(str, pages)) + " 页的中文译文（按块 id）。译文已定稿，只做精读标注，不许改译文。\n\n"
+            + rules + "\n\n"
+            + "只输出一个 JSON 对象，不要别的文字：\n"
+            + '{"blocks": [{"id": "上面列出的块 id", "highlights": [每条 {category, quote, occurrence}], "annotations": [每条 {type, anchor_quote, content, basis}]}]}\n'
+            + "只列需要标注的块；两样都没有的块不用列。\n\n译文：\n" + "\n\n".join(lines))
 
 
 def _block_text(b: dict) -> str:

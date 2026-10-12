@@ -102,6 +102,14 @@ def _problems(data: dict) -> list[str]:
     return problems + tex_problems(tex)
 
 
+def _validate_reading(data: dict) -> tuple[list[str], set[int]]:
+    """校验精读数据，返回 (问题列表, 有原始标注但全部被丢弃的页码集合)。"""
+    raw = reading.reading_pages(data.get("blocks", []))
+    problems = reading.validate_reading(data.get("blocks", []))
+    kept = reading.reading_pages(data.get("blocks", []))
+    return problems, raw - kept
+
+
 def journal(ws: Workspace, line: str) -> None:
     """每篇论文自己的翻译记录 job.log，页面上“查看记录”看的就是它。"""
     with open(ws.root / "job.log", "a", encoding="utf-8") as f:
@@ -122,18 +130,25 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         raise
     data = _normalize(data, batch, _taken(ws, batch))
     problems = _problems(data)
+    reading_failed: set[int] = set()
     if reading_on:
-        problems += reading.validate_highlights(data["blocks"])
+        rp, rfp = _validate_reading(data)
+        problems += rp
+        reading_failed = rfp
     if problems:  # 给一次修的机会
         say(f"第 {batch[0]} 页起有 {len(problems)} 处公式或格式问题，正在让模型修正")
         try:
             fixed = engines.parse_json(engines.run(cfg, prompts.repair(prompts.dump(data), problems), ws.root, None, cancel))
             fixed = _normalize(fixed, batch, _taken(ws, batch))
             fixed_problems = _problems(fixed)
+            fixed_failed: set[int] = set()
             if reading_on:
-                fixed_problems += reading.validate_highlights(fixed["blocks"])
+                fp, ffp = _validate_reading(fixed)
+                fixed_problems += fp
+                fixed_failed = ffp
             if fixed["blocks"] and len(fixed_problems) < len(problems):
                 data = fixed
+                reading_failed = fixed_failed
         except engines.EngineError as e:
             journal(ws, f"第 {batch} 页修正失败，保留原译：{e}")
     if not data["blocks"] and not data.get("references"):  # 整页都是参考文献时只有 references，没有新块，也算译完
@@ -141,9 +156,13 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
     with _merge_lock:
         data = _normalize(data, batch, _taken(ws, batch))  # 并发时别的批可能刚占用了同名 id
         if reading_on:
-            reading.validate_highlights(data["blocks"])  # id 可能被重排，重新校验编号
+            reading.validate_reading(data["blocks"])  # id 可能被重排，重新校验编号
+            if reading_failed:
+                journal(ws, f"第 {sorted(reading_failed)} 页精读标注不合格，译文已保留，可稍后补精读")
         merge_blocks(ws, data, done=batch, replace_pages=batch,
-                     reading={"pages": batch, "status": "completed" if reading_on else "skipped", "enabled": reading_on})
+                     reading={"pages": batch, "statuses": {p: ("failed" if p in reading_failed else "completed") for p in batch},
+                              "enabled": reading_on} if reading_on else
+                    {"pages": batch, "status": "skipped", "enabled": False})
         _save_checks(ws, data.get("checks"), batch)
         try:
             pdfwork.locate(ws.root)
@@ -240,6 +259,108 @@ def translate_pages(ws: Workspace, cfg: dict, pages: list[int], cancel, report) 
         raise engines.Cancelled()
     journal(ws, "结束" + (f"，{len(failed)} 页失败：{sorted(failed)}" if failed else "，全部成功"))
     return failed
+
+
+def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, report) -> dict[int, str]:
+    """给已翻译的页面补精读标注：不动译文，只生成高亮和批注。
+    pages=None 时自动挑缺精读的页（没记过状态、failed、stale）。返回失败页 {页码: 原因}。"""
+    if not cfg.get("reading_enabled", True):
+        return {}
+    paper = ws.load("paper")
+    done = set(paper.get("translation", {}).get("done_pages", []))
+    if pages is None:
+        pages = reading.pages_needing_reading(paper)
+    else:
+        pages = [p for p in pages if p in done]
+    pages = sorted(pages)
+    if not pages:
+        return {}
+    size = max(1, int(cfg.get("batch_pages") or 2))
+    batches = [pages[i:i + size] for i in range(0, len(pages), size)]
+    journal(ws, f"补精读开始：{len(pages)} 页，{len(batches)} 批")
+    failed: dict[int, str] = {}
+    for i, batch in enumerate(batches):
+        if cancel is not None and cancel.is_set():
+            raise engines.Cancelled()
+        try:
+            _one_enrich(ws, cfg, batch, cancel)
+        except engines.Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001
+            err = str(e)[:300]
+            journal(ws, f"补精读第 {batch} 页失败：{err}")
+            for n in batch:
+                failed[n] = err
+        report(min((i + 1) * size, len(pages)), len(pages),
+                f"补精读 {min((i + 1) * size, len(pages))}/{len(pages)} 页" + (f"，第 {sorted(failed)} 页失败" if failed else ""))
+    journal(ws, "补精读结束" + (f"，{len(failed)} 页失败：{sorted(failed)}" if failed else "，全部成功"))
+    return failed
+
+
+def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel) -> None:
+    """一批已译页的补精读：拿现有译文问模型要标注，校验后写回块。"""
+    prompt = prompts.enrich(ws, batch)
+    text = engines.run(cfg, prompt, ws.root, None, cancel)
+    data = engines.parse_json(text)
+    items = data.get("blocks") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise engines.EngineError("补精读返回里没有 blocks")
+    clean = _clean_enrich_items(ws, items, batch)
+    problems, raw = _validate_reading({"blocks": clean})
+    kept = reading.reading_pages(clean)
+    if problems:  # 给一次修的机会：只发有问题的块和错误说明，不重译
+        try:
+            fixed = engines.parse_json(engines.run(
+                cfg, prompts.repair(prompts.dump({"blocks": clean}), problems), ws.root, None, cancel))
+            fixed_items = fixed.get("blocks") if isinstance(fixed, dict) else fixed
+            fixed_clean = _clean_enrich_items(ws, fixed_items if isinstance(fixed_items, list) else [], batch)
+            fp, _ = _validate_reading({"blocks": fixed_clean})
+            if fixed_clean and len(fp) < len(problems):
+                clean, problems = fixed_clean, fp
+                kept = reading.reading_pages(clean)
+        except engines.EngineError as e:
+            journal(ws, f"补精读第 {batch} 页修正失败，保留已合格部分：{e}")
+
+    def apply(paper):
+        by_id = {b["id"]: b for b in paper.get("blocks", [])}
+        for b in clean:
+            target = by_id.get(b["id"])
+            if not target:
+                continue
+            for k in ("highlights", "annotations"):
+                if b.get(k):
+                    target[k] = b[k]
+                else:
+                    target.pop(k, None)
+        statuses = {p: ("completed" if (p in kept or p not in raw) else "failed") for p in batch}
+        reading.apply_reading_state(paper, batch, statuses, True)
+
+    with _merge_lock:
+        ws.update("paper", apply)
+    journal(ws, f"补精读第 {batch} 页完成" + (f"，{len(problems)} 处标注不合格已丢弃" if problems else ""))
+
+
+def _clean_enrich_items(ws: Workspace, items: list, batch: list[int]) -> list[dict]:
+    """只保留本批页面上已有的块，带上该块的译文供校验定位；id 不认识的丢弃。"""
+    paper = ws.load("paper")
+    by_id = {b["id"]: b for b in paper.get("blocks", []) if b.get("page") in batch}
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        src = by_id.get(str(it.get("id") or ""))
+        if not src:
+            continue
+        b = {"id": src["id"], "type": src.get("type"), "page": src.get("page")}
+        for k in ("zh", "items", "caption_zh"):
+            if src.get(k) is not None:
+                b[k] = src[k]
+        if isinstance(it.get("highlights"), list):
+            b["highlights"] = it["highlights"]
+        if isinstance(it.get("annotations"), list):
+            b["annotations"] = it["annotations"]
+        out.append(b)
+    return out
 
 
 def answer(ws: Workspace, cfg: dict, note_id: str, cancel) -> None:
