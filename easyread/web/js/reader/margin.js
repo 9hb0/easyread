@@ -29,7 +29,7 @@
       push(PR.anchorOfEntry(e), { src: "agent", t: host ? (host.created || "") + "~" + (e.at || "") : e.at || "", data: e });
     }
     for (const b of S.paper.blocks || []) {  // AI 精读批注（随翻译生成，存在 paper.json 的块上）
-      (b.annotations || []).forEach((a, i) => {
+      (PR.readingAnnotations ? PR.readingAnnotations(b) : []).forEach((a, i) => {
         push(anchorOf(b.id), { src: "reading", t: String(PR.order[b.id] ?? 0).padStart(6, "0") + "#" + i, data: Object.assign({ block: b.id }, a) });
       });
     }
@@ -45,7 +45,9 @@
       return '<div class="card reading" data-ann="' + PR.esc(d.id) + '" data-anchor="' + PR.esc(item.anchor) + '">' +
         '<div class="lbl"><span>精读批注 · ' + PR.esc(t) + '</span><span class="meta">' + PR.esc(basis) + "</span></div>" +
         (d.anchor_quote ? '<div class="quote">「' + PR.md(d.anchor_quote, { cite: false, xref: false }) + "」</div>" : "") +
-        '<div class="body">' + PR.mdBlocks(d.content) + "</div></div>";
+        '<div class="body">' + PR.mdBlocks(d.content) + '</div><div class="reading-sources">' +
+        (PR.readingSourceHtml ? PR.readingSourceHtml(d) : "") +
+        '<button type="button" class="reading-source" data-a="reading-anchor">定位译文</button></div></div>';
     }
     if (item.src === "agent") {
       return '<div class="card agent' + (d.kind === "check" ? " check" : "") + '" data-card="' + PR.esc(d.id) + '" data-anchor="' + PR.esc(item.anchor) + '">' +
@@ -99,7 +101,7 @@
       if (wide) margin.insertAdjacentHTML("beforeend", html);
       else {
         const mine = items.every((i) => i.src === "mine");
-        host.appendChild(PR.el("button", { class: "note-pin" + (mine ? " mine" : ""), title: "讨论与笔记", "data-t": "pin", text: String(items.length) }));
+        host.appendChild(PR.el("button", { class: "note-pin" + (mine ? " mine" : ""), type: "button", title: "讨论与笔记", "data-t": "pin", "aria-expanded": host.classList.contains("notes-open"), "aria-label": "展开或收起 " + items.length + " 条讨论与批注", text: String(items.length) }));
         host.appendChild(PR.el("div", { class: "inline-notes" }, html));
       }
     }
@@ -110,8 +112,8 @@
 
   function prepCard(card) {
     const body = card.querySelector(".body");
-    const id = card.dataset.card || card.dataset.note;
-    if (body && !expanded.has(id) && body.scrollHeight > 220) {
+    const id = card.dataset.ann || card.dataset.card || card.dataset.note;
+    if (body && !expanded.has(id) && !card.querySelector('[data-a="more"]') && body.scrollHeight > 220) {
       card.classList.add("clamp");
       card.insertAdjacentHTML("beforeend", '<button class="more" data-a="more">展开全文</button>');
     }
@@ -256,11 +258,16 @@
   PR.cardClick = function (e, inPanel) {
     const card = e.target.closest(".card");
     if (!card) return false;
-    if (card.dataset.ann && e.target.closest(".body, .quote")) { PR.jumpTo("b-" + card.dataset.anchor); return true; }
+    if (card.dataset.ann && e.target.closest(".body, .quote, [data-a=reading-anchor]")) {
+      PR.jumpTo("b-" + card.dataset.anchor);
+      const host = document.getElementById("b-" + card.dataset.anchor);
+      if (host) { host.setAttribute("tabindex", "-1"); host.focus({ preventScroll: true }); }
+      return true;
+    }
     const a = e.target.closest("[data-a]"), k = e.target.closest("[data-k]"), col = e.target.closest("[data-color]");
     const nid = card.dataset.note;
     const rerender = () => (inPanel ? PR.renderNotesPanel(nid) : PR.openNoteEditor(nid));
-    if (a && a.dataset.a === "more") { expanded.add(card.dataset.card || nid); card.classList.remove("clamp"); a.remove(); PR.layoutMargin(); return true; }
+    if (a && a.dataset.a === "more") { expanded.add(card.dataset.ann || card.dataset.card || nid); card.classList.remove("clamp"); a.remove(); PR.layoutMargin(); return true; }
     if (!nid && card.dataset.card && a && a.dataset.a === "del") { PR.deleteDiscussion(card.dataset.card, card, inPanel); return true; }
     if (nid && a) {
       const n = noteById(nid);
@@ -288,19 +295,39 @@
     return false;
   };
   document.addEventListener("click", (e) => { if (e.target.closest("#margin, .inline-notes")) PR.cardClick(e, false); });
+  document.addEventListener("click", (e) => {
+    const pin = e.target.closest && e.target.closest("#paper .note-pin");
+    if (!pin) return;
+    const host = pin.closest(".blk");
+    if (!host) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const open = host.classList.toggle("notes-open");
+    pin.setAttribute("aria-expanded", String(open));
+    if (open) PR.$$(".inline-notes .card", host).forEach(prepCard);
+    if (open && e.detail === 0) host.querySelector(".inline-notes button")?.focus({ preventScroll: true });
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    const inline = e.target.closest && e.target.closest(".inline-notes");
+    if (e.key !== "Escape" || !inline || e.target.matches("textarea")) return;
+    const host = inline.closest(".blk"), pin = host && host.querySelector(".note-pin");
+    if (!pin) return;
+    e.preventDefault(); e.stopImmediatePropagation(); host.classList.remove("notes-open");
+    pin.setAttribute("aria-expanded", "false"); pin.focus({ preventScroll: true });
+  }, true);
 
   /* 卡片和段落互相高亮 */
   function link(card, on) {
     const host = document.getElementById("b-" + card.dataset.anchor);
     host && host.classList.toggle("linked", on);
     card.classList.toggle("linked", on);
-    const sel = card.dataset.note ? 'mark[data-note="' + card.dataset.note + '"]' : 'mark[data-card="' + card.dataset.card + '"]';
-    PR.$$(sel).forEach((m) => m.classList.toggle("active", on));
+    const marks = card.dataset.ann && PR.readingMarksForAnnotation ? PR.readingMarksForAnnotation(card.dataset.anchor, card.dataset.ann) :
+      PR.$$("mark.hl").filter((m) => card.dataset.note ? m.dataset.note === card.dataset.note : m.dataset.card === card.dataset.card);
+    marks.forEach((m) => m.classList.toggle("active", on));
   }
   document.addEventListener("mouseover", (e) => {
-    const card = e.target.closest && e.target.closest("#margin .card, #notespanel .card");
+    const card = e.target.closest && e.target.closest("#margin .card, #notespanel .card, .inline-notes .card");
     if (card && !card.classList.contains("linked")) { PR.$$(".card.linked").forEach((c) => link(c, false)); link(card, true); }
-    if (!card && e.target.closest && !e.target.closest("#margin, #notespanel")) PR.$$(".card.linked").forEach((c) => link(c, false));
+    if (!card && e.target.closest && !e.target.closest("#margin, #notespanel, .inline-notes")) PR.$$(".card.linked").forEach((c) => link(c, false));
   });
 
   PR.flashCard = function (id) {

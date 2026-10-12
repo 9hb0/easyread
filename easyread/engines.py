@@ -20,6 +20,8 @@ import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 from pathlib import Path
 
+_tls = threading.local()
+
 
 class EngineError(RuntimeError):
     pass
@@ -34,6 +36,8 @@ REASONING_EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
 
 
 def run(cfg: dict, prompt: str, cwd: Path, images: list[Path] | None = None, cancel: threading.Event | None = None) -> str:
+    _tls.usage = None
+    _tls.model = None
     engine = cfg.get("engine")
     if engine == "claude":
         return run_claude(cfg["claude"], prompt, cwd, cancel)
@@ -42,6 +46,15 @@ def run(cfg: dict, prompt: str, cwd: Path, images: list[Path] | None = None, can
     if engine == "openai":
         return run_openai(cfg["openai"], prompt, images or [], cancel)
     raise EngineError("没有配置翻译引擎（设置 → 翻译引擎）")
+
+
+def last_usage() -> dict | None:
+    """最近一次调用报告的用量；引擎未提供时为 None，不猜测。"""
+    return getattr(_tls, "usage", None)
+
+
+def last_model() -> str | None:
+    return getattr(_tls, "model", None)
 
 
 def image_mode(cfg: dict) -> str:
@@ -100,6 +113,13 @@ def run_claude(c: dict, prompt: str, cwd: Path, cancel=None) -> str:
         if "limit" in msg.lower():
             msg += "（用量到上限了，等额度恢复后点“重试”，或在设置里换个引擎）"
         raise EngineError(f"Claude Code 出错：{msg}")
+    usage = res.get("usage") or {}
+    if "input_tokens" in usage and "output_tokens" in usage:
+        prompt = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        output = usage["output_tokens"]
+        _tls.usage = {"prompt_tokens": prompt, "completion_tokens": output, "total_tokens": prompt + output}
+    models = res.get("modelUsage") or {}
+    _tls.model = next(iter(models), None)
     return res.get("result") or ""
 
 
@@ -199,11 +219,15 @@ def run_openai(c: dict, prompt: str, images: list[Path], cancel=None) -> str:
             raise EngineError(f"连不上接口：{e}")
     try:
         choice = res["choices"][0]
+        _tls.usage = res.get("usage") or None
+        _tls.model = res.get("model")
         text = choice["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise EngineError(f"接口返回格式不对：{str(res)[:300]}")
     if choice.get("finish_reason") == "length":
         raise EngineError("模型输出被截断了（超过它的输出长度上限）。在设置里把“每次交给模型的页数”调成 1 页再试。")
+    if not isinstance(text, str) or not text.strip():
+        raise EngineError(f"模型返回空内容（finish_reason={choice.get('finish_reason', 'unknown')}，用量={_tls.usage}）")
     return text
 
 

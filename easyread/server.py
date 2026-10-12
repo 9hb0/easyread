@@ -369,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                     pages = sorted(set(ws.load("paper").get("translation", {}).get("done_pages", [])))
                 elif body.get("pages"):
                     pages = paperdata.parse_pages(body["pages"])
-                return self._json(200, app.jobs.submit_small("enrich", ws.id, pages=pages))
+                return self._json(200, app.jobs.enqueue_enrich(ws, pages))
             if action == "reveal":  # 在资源管理器 / 访达里打开这篇的文件夹
                 _reveal(ws.root)
                 return self._json(200, {"ok": True})

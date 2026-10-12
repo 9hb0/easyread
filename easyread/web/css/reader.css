@@ -180,7 +180,8 @@ mark.sem.cat-problem { background: color-mix(in srgb, var(--sem-problem) 30%, tr
 mark.sem.cat-method { background: color-mix(in srgb, var(--sem-method) 28%, transparent); }
 mark.sem.cat-innovation { background: color-mix(in srgb, var(--sem-innovation) 26%, transparent); }
 mark.sem.cat-evidence { background: color-mix(in srgb, var(--sem-evidence) 34%, transparent); }
-mark.sem:hover { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 30%, transparent); }
+mark.sem:hover, mark.sem.active { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 55%, transparent); }
+mark.sem:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 :root[data-theme="dark"] mark.sem.cat-background { background: color-mix(in srgb, var(--sem-background) 44%, transparent); }
 :root[data-theme="dark"] mark.sem.cat-related_work { background: color-mix(in srgb, var(--sem-related_work) 38%, transparent); }
 :root[data-theme="dark"] mark.sem.cat-problem { background: color-mix(in srgb, var(--sem-problem) 42%, transparent); }
@@ -201,16 +202,30 @@ mark.sem:hover { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 30%,
 .dot.cat-method { background: var(--sem-method); }
 .dot.cat-innovation { background: var(--sem-innovation); }
 .dot.cat-evidence { background: var(--sem-evidence); }
-.rf-btns { display: flex; gap: 8px; padding: 8px 4px 2px; }
+.rf-btns { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 4px 2px; }
 .rf-pop { padding: 4px 2px; color: var(--ink-2); }
 
 /* 精读批注页边卡片（随翻译生成，与 AI 讨论、我的笔记区分） */
-.card.reading { border-left: 3px solid #8B7EC8; }
-.card.reading .lbl span:first-child { color: #8B7EC8; }
+.card.reading { border-left: 3px solid var(--sem-innovation); overflow-wrap: anywhere; }
+.card.reading .lbl span:first-child { color: var(--ink-2); }
 .rf-ann { padding: 6px 2px 2px; border-top: 1px solid var(--rule); font-size: .92em; }
-.rf-ann .t { display: inline-block; margin-right: 6px; color: #8B7EC8; font-size: .9em; }
+.rf-ann .t { display: inline-block; margin-right: 6px; color: var(--ink-2); font-size: .9em; }
 .rf-ann .q { color: var(--ink-3); font-size: .9em; }
 .rf-ann-more { padding: 4px 2px; color: var(--ink-3); font-size: .88em; }
+.rf-ann .basis { display: inline-block; font-size: .85em; color: var(--ink-3); }
+.rf-pop, .rf-ann .q { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reading-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+button.reading-source { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 3px 7px; font: 12px/1.5 var(--ui); cursor: pointer; }
+button.reading-source:hover { background: var(--accent-soft-2); }
+.reading-source:focus-visible, .rf-row:focus-visible, .rf-btns button:focus-visible, .reading-close:focus-visible, .note-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#popover:has([data-reading-close]) { box-sizing: border-box; max-width: min(520px, calc(100vw - 16px)); max-height: calc(100dvh - 76px); overflow-y: auto; overflow-wrap: anywhere; padding-right: 34px; }
+.reading-close { position: absolute; top: 7px; right: 7px; width: 25px; height: 25px; border-radius: 5px; font-size: 20px; color: var(--ink-3); }
+.reading-close:hover { background: var(--accent-soft); }
+@media (max-width: 760px) {
+  #popover:has([data-reading-close]) { max-height: calc(100dvh - 76px); }
+  .rf-btns .btn { min-height: 36px; }
+  .reading-source { min-height: 32px; }
+}
 code { font: .86em var(--mono); background: var(--accent-soft); padding: .1em .3em; border-radius: 3px; }
 
 .edited-dot { position: absolute; top: .72em; left: -24px; width: 5px; height: 5px; border-radius: 50%; background: var(--mine); opacity: .8; }

@@ -5,8 +5,9 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import uuid
 
-from . import config, deepread, obsidian, translate
+from . import config, deepread, obsidian, reading, translate
 from .engines import Cancelled, EngineError
 from .library import Library
 from .log import log
@@ -26,17 +27,37 @@ class Jobs:
         self._resume()
 
     # ---------- 整篇 ----------
-    def _write(self, ws: Workspace, **fields):
+    def _write(self, ws: Workspace, expected_task=None, **fields):
         def apply(job):
+            if expected_task and job.get("task_id") != expected_task:
+                return False
             job.update(fields)
             job["updated"] = now_iso()
+            return True
         ws.update("job", apply)
 
     def enqueue(self, ws: Workspace, pages: list[int] | None = None, translate_after: bool = True, scope: str | None = None):
         """pages=None：按 scope（all / body / first:N）翻译还没译的页。"""
+        active = self.cancels.get(ws.id)
+        if active:
+            active.set()
         self._write(ws, type="translate" if translate_after else "prepare", state="queued", message="排队中",
-                    pages=pages, scope=scope or "all", translate=translate_after, done=0, total=0, error="", failed={})
+                    pages=pages, scope=scope or "all", translate=translate_after, task_id=uuid.uuid4().hex,
+                    reading_enabled=bool(config.load().get("reading_enabled", True)), done=0, total=0, error="", failed={})
         self.bulk.put(ws.id)
+
+    def enqueue_enrich(self, ws: Workspace, pages: list[int] | None = None):
+        """Use the existing durable queue, including cancellation and restart recovery."""
+        current = ws.load("job") or {}
+        if current.get("state") in ("queued", "running"):
+            if current.get("type") == "enrich":
+                return current
+            raise ValueError("这篇论文正在翻译，当前批次完成后再补精读")
+        self._write(ws, type="enrich", state="queued", message="补精读排队中", pages=pages,
+                    task_id=uuid.uuid4().hex, translate=False, reading_enabled=True,
+                    done=0, total=0, error="", failed={})
+        self.bulk.put(ws.id)
+        return ws.load("job")
 
     def cancel(self, pid: str):
         ev = self.cancels.get(pid)
@@ -50,7 +71,7 @@ class Jobs:
         for ws in self.lib.all():
             job = ws.load("job") or {}
             if job.get("state") in ("queued", "running"):
-                self._write(ws, state="queued", message="排队中（服务重启后继续）")
+                self._write(ws, state="queued", resume=True, message="排队中（服务重启后继续）")
                 self.bulk.put(ws.id)
             state = deepread.read(ws)
             if state["state"] in ("queued", "running"):
@@ -70,10 +91,10 @@ class Jobs:
             try:
                 self._run_bulk(ws, job, cancel)
             except Cancelled:
-                self._write(ws, state="cancelled", message="已取消，已译的部分保留")
+                self._write(ws, expected_task=job.get("task_id"), state="cancelled", message="已取消，已译的部分保留")
             except Exception as e:  # noqa: BLE001
                 msg = str(e) if isinstance(e, (EngineError, KeyError, ValueError)) else f"{type(e).__name__}: {e}"
-                self._write(ws, state="error", message="出错了", error=msg[:800])
+                self._write(ws, expected_task=job.get("task_id"), state="error", message="出错了", error=msg[:800])
                 log.exception("后台任务出错 %s", pid)
                 try:
                     translate.journal(ws, f"出错停止：{msg[:500]}")
@@ -83,43 +104,73 @@ class Jobs:
                 self.cancels.pop(pid, None)
 
     def _run_bulk(self, ws: Workspace, job: dict, cancel: threading.Event):
-        cfg = config.load()
+        cfg = dict(config.load(), reading_enabled=job.get("reading_enabled", True))
+        task_id = job.get("task_id") or uuid.uuid4().hex
+        cfg["_task_id"] = task_id
+        if not job.get("task_id"):
+            self._write(ws, task_id=task_id)
+            job["task_id"] = task_id
+        def write(**fields):
+            return self._write(ws, expected_task=task_id, **fields)
+        def report(done, total, message):
+            if cancel.is_set():
+                raise Cancelled()
+            write(state="running", done=done, total=total, message=message)
+        if job.get("type") == "enrich":
+            paper = ws.load("paper")
+            wanted = job.get("pages")
+            needed = set(reading.pages_needing_reading(paper))
+            if wanted is not None and job.get("resume"):
+                wanted = [p for p in wanted if p in needed]
+            failed = translate.enrich_pages(ws, cfg, wanted, cancel, report)
+            write(state="partial" if failed else "done", failed={str(p): e for p, e in failed.items()},
+                        error=next(iter(failed.values()), ""), message=f"补精读失败 {len(failed)} 页，译文保留" if failed else "补精读完成")
+            return
         if not ws.load("paper").get("meta", {}).get("pages"):
-            self._write(ws, state="running", message="正在渲染原页、抽取文字")
+            write(state="running", message="正在渲染原页、抽取文字")
             translate.prepare(ws)
         if not job.get("translate") or cfg.get("engine") == "none":
-            self._write(ws, state="done", message="已导入" + ("（未开启自动翻译）" if job.get("translate") else ""))
+            write(state="done", message="已导入" + ("（未开启自动翻译）" if job.get("translate") else ""))
             return
         paper = ws.load("paper")
         all_pages = [p["n"] for p in paper["meta"]["pages"]]
         done_pages = set(paper.get("translation", {}).get("done_pages", []))
         wanted = job.get("pages") or translate.scope_pages(ws, job.get("scope")) or all_pages
-        pages = wanted if job.get("pages") else [n for n in wanted if n not in done_pages]
+        completed = paper.get("translation", {}).get("completed_revisions") or {}
+        pages = [n for n in wanted if completed.get(str(n)) != f"{task_id}:{n}"] if job.get("pages") else [n for n in wanted if n not in done_pages]
+        cfg["_target_pages"] = wanted if not job.get("pages") else all_pages
+        cfg["_scope"] = "pages" if job.get("pages") else job.get("scope", "all")
         if not pages:
-            self._write(ws, state="done", message="选定范围已译完")
+            if cfg.get("reading_enabled", True):
+                try:
+                    translate.finalize_reading(ws, cfg, cancel)
+                except Cancelled:
+                    raise
+                except Exception as exc:
+                    translate.journal(ws, f"研究导航整合失败：{exc}")
+                    write(guide_error=str(exc)[:300])
+            write(state="done", message="选定范围已译完")
             return
-
-        def report(done, total, message):
-            if cancel.is_set():
-                raise Cancelled()
-            self._write(ws, state="running", done=done, total=total, message=message)
 
         started = time.time()
         failed = translate.translate_pages(ws, cfg, pages, cancel, report)
         if not failed and cfg.get("reading_enabled", True):
             try:
-                report(pages and pages[-1] or len(pages), len(pages), "正在整合研究导航")
+                report(len(pages), len(pages), "正在整合研究导航")
                 translate.finalize_reading(ws, cfg, cancel)
+            except Cancelled:
+                raise
             except Exception as e:  # noqa: BLE001 —— 导航失败不算翻译失败
                 translate.journal(ws, f"研究导航整合失败：{e}")
                 log.warning("研究导航整合失败 %s: %s", ws.id, e)
+                write(guide_error=str(e)[:300])
         minutes = max(1, round((time.time() - started) / 60))
         if failed:
             first = next(iter(failed.values()))
-            self._write(ws, state="partial", failed={str(k): v for k, v in failed.items()}, error=first,
+            write(state="partial", failed={str(k): v for k, v in failed.items()}, error=first,
                         message=(f"{len(pages) - len(failed)} 页译好了，" if len(failed) < len(pages) else "") + f"{len(failed)} 页没译成功")
         else:
-            self._write(ws, state="done", failed={}, error="", message=f"翻译完成（{len(pages)} 页，用时约 {minutes} 分钟）")
+            write(state="done", failed={}, error="", message=f"翻译完成（{len(pages)} 页，用时约 {minutes} 分钟）")
 
     # ---------- 小任务 ----------
     def submit_small(self, kind: str, pid: str, **kw) -> dict:

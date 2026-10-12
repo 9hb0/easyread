@@ -106,7 +106,7 @@ def cmd_translate(a):
         urllib.request.urlopen(req)
         out("已交给服务排队翻译，进度在文献库页面上看。")
         return
-    from .translate import translate_pages
+    from .translate import translate_pages, finalize_reading
     cfg = config.load()
     paper = ws.load("paper")
     done = set(paper.get("translation", {}).get("done_pages", []))
@@ -114,6 +114,8 @@ def cmd_translate(a):
     failed = translate_pages(ws, cfg, pages, threading.Event(), lambda d, t, m: out(f"[{d}/{t}] {m}"))
     if failed:
         out(f"没译成功的页：{sorted(failed)}，原因见 {ws.root / 'job.log'}")
+    else:
+        finalize_reading(ws, cfg)
 
 
 def cmd_enrich(a):
@@ -122,6 +124,14 @@ def cmd_enrich(a):
     if a.all:
         paper = ws.load("paper")
         pages = sorted(set(paper.get("translation", {}).get("done_pages", [])))
+    url = running_server()
+    if url:
+        token = json.loads(urllib.request.urlopen(url + "/api/library").read())["token"]
+        req = urllib.request.Request(f"{url}/api/p/{ws.id}/enrich", data=json.dumps({"pages": pages}).encode(),
+                                     headers={"X-Token": token, "Content-Type": "application/json"})
+        urllib.request.urlopen(req)
+        out("已交给服务补精读，译文保留；服务重启后可继续。")
+        return
     from .translate import enrich_pages
     cfg = config.load()
     failed = enrich_pages(ws, cfg, pages, threading.Event(), lambda d, t, m: out(f"[{d}/{t}] {m}"))

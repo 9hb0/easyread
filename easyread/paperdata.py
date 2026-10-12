@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 
 from .store import Workspace, now_iso
 from . import reading as reading_mod
@@ -24,7 +25,7 @@ def parse_pages(spec) -> list[int]:
     return out
 
 
-def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, reading: dict | None = None) -> dict:
+def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, reading: dict | None = None, guard=None) -> dict:
     """并入一批块。同 id 整块替换；新块按 _after 或页码顺序插入。
     replace_pages：先删掉这些页上已有的块（重新翻译某几页时用）。"""
     if isinstance(data, list):
@@ -34,9 +35,27 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, readi
             raise ValueError(f"块缺 id 或类型不对：{str(b)[:120]}")
 
     def apply(paper):
+        if guard and not guard(paper):
+            return {"stale": True}
         blocks = paper.setdefault("blocks", [])
+        changed_pages = set(parse_pages(replace_pages or []))
+        old_blocks = {b["id"]: b for b in blocks}
+        for b in data.get("blocks", []):
+            old = old_blocks.get(b["id"])
+            if old and (old.get("page") != b.get("page") or reading_mod.block_zh(old) != reading_mod.block_zh(b)
+                        or old.get("source_en") != b.get("source_en")):
+                changed_pages.update(p for p in (old.get("page"), b.get("page")) if p is not None)
+        if changed_pages:
+            rd = paper.get("reading") or {}
+            if "insights" in rd:
+                rd["insights"] = reading_mod.drop_insights_on_pages(rd["insights"], list(changed_pages))
+            for page in changed_pages:
+                state = (rd.get("pages") or {}).get(str(page))
+                if state:
+                    state["status"] = "stale"
+            reading_mod.invalidate_synthesis(paper)
         if replace_pages:
-            drop = set(replace_pages)
+            drop = set(parse_pages(replace_pages))
             blocks[:] = [b for b in blocks if b.get("page") not in drop]
         n_new = n_upd = 0
         last = None  # 同一批的新块保持给定顺序，接在上一个新块后面
@@ -70,9 +89,6 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, readi
         if data.get("translation"):
             tr.update(data["translation"])
         if reading:
-            if replace_pages and (paper.get("reading") or {}).get("insights"):
-                paper["reading"]["insights"] = reading_mod.drop_insights_on_pages(
-                    paper["reading"]["insights"], parse_pages(replace_pages))
             if reading.get("insights"):
                 paper.setdefault("reading", {})["insights"] = reading_mod.merge_insights(
                     (paper.get("reading") or {}).get("insights", []), reading["insights"])
@@ -84,6 +100,7 @@ def merge_blocks(ws: Workspace, data: dict, done=None, replace_pages=None, readi
             total = paper.get("meta", {}).get("page_count") or 0
             n = len(tr["done_pages"])
             tr["scope"] = "全文" if total and n >= total else f"已译 {n} / {total} 页"
+        reading_mod.rebuild_guide(paper)
         return {"new": n_new, "updated": n_upd, "done_pages": tr.get("done_pages", [])}
 
     return ws.update("paper", apply)
@@ -151,8 +168,13 @@ def set_block_text(ws: Workspace, key: str, zh: str) -> None:
             b.pop("highlights", None)
             b.pop("annotations", None)
             page = b.get("page")
-            if page and (paper.get("reading", {}).get("pages", {}).get(str(page)) or {}).get("status"):
-                paper["reading"]["pages"][str(page)]["status"] = "stale"  # 该页精读标注已失效
+            if page:
+                paper.setdefault("translation", {}).setdefault("page_revisions", {})[str(page)] = uuid.uuid4().hex
+                rd = paper.setdefault("reading", {})
+                rd["insights"] = reading_mod.drop_insights_on_pages(rd.get("insights") or [], [page])
+                reading_mod.apply_reading_state(paper, [page], "stale", bool(rd.get("enabled", True)))
+                reading_mod.invalidate_synthesis(paper)
+                reading_mod.rebuild_guide(paper)
             return
         raise KeyError(key)
     ws.update("paper", apply)

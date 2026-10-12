@@ -35,8 +35,7 @@ def render_pages(pdf: Path, out_dir: Path, scale: float = 2.4, quality: int = 84
     import pypdfium2 as pdfium
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    with _pdfium_lock:
-        doc = pdfium.PdfDocument(str(pdf))
+    with _pdfium_lock, pdfium.PdfDocument(str(pdf)) as doc:
         pages = []
         for i in range(len(doc)):
             page = doc[i]
@@ -54,11 +53,11 @@ def extract_text(pdf: Path, out_dir: Path) -> int:
     import pypdfium2 as pdfium
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    with _pdfium_lock:
-        doc = pdfium.PdfDocument(str(pdf))
+    with _pdfium_lock, pdfium.PdfDocument(str(pdf)) as doc:
         for i in range(len(doc)):
             tp = doc[i].get_textpage()
-            (out_dir / f"page-{i + 1:03d}.txt").write_text(tp.get_text_range(), encoding="utf-8")
+            text = tp.get_text_range().replace("\r\n", "\n").replace("\r", "\n")
+            (out_dir / f"page-{i + 1:03d}.txt").write_text(text, encoding="utf-8", newline="\n")
     with pdfplumber.open(str(pdf)) as plumb:
         for i, page in enumerate(plumb.pages):
             W, H = float(page.width), float(page.height)
@@ -302,7 +301,10 @@ def warm_variants(root: Path, width: int = PANEL_WIDTH) -> None:
 
 
 def prepare(root: Path) -> list[dict]:
-    """渲染原页 + 抽文字，返回 meta.pages。"""
+    """渲染原页、抽文字并保存稳定原文块，返回 meta.pages。"""
+    from . import sourceblocks
+
     pages = render_pages(root / "source.pdf", root / "pages")
     extract_text(root / "source.pdf", root / "extract")
+    sourceblocks.ensure(root, pages)
     return pages

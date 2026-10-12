@@ -14,3 +14,4 @@ dist/
 .prefs.json
 .models-seen.json
 /promo/
+/artifacts/reading-qa/

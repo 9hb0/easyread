@@ -51,7 +51,7 @@ class ValidateHighlightsTest(unittest.TestCase):
         problems = reading.validate_highlights(blocks)
         self.assertEqual(problems, [])
         self.assertEqual(blocks[0]["highlights"], [
-            {"id": "h-p1-1-0", "category": "method", "quote": "新的注意力机制", "occurrence": 0}])
+            {"id": "h-p1-1-0", "block_id": "p1-1", "category": "method", "quote": "新的注意力机制", "occurrence": 0}])
 
     def test_invalid_category_dropped(self):
         blocks = self.para(highlights=[{"category": "important", "quote": "新的注意力机制"}])
@@ -74,8 +74,8 @@ class ValidateHighlightsTest(unittest.TestCase):
               {"category": "evidence", "quote": "新的注意力机制", "occurrence": 0}]
         blocks = self.para(highlights=hl)
         problems = reading.validate_highlights(blocks)
-        self.assertEqual(len(problems), 2)
-        self.assertEqual([h["category"] for h in blocks[0]["highlights"]], ["method"])
+        self.assertEqual(len(problems), 3)
+        self.assertNotIn("highlights", blocks[0])
 
     def test_list_and_caption_units(self):
         blocks = [{"id": "l1", "type": "list", "page": 1, "ordered": True,
@@ -168,6 +168,10 @@ class TranslateIntegrationTest(unittest.TestCase):
 
     def _run(self, result_json, reading_enabled=True):
         prompts_seen = []
+        # A two-page successful fixture must actually contain both pages.
+        if isinstance(result_json, dict) and not any(b.get("page") == 2 for b in result_json.get("blocks", [])):
+            result_json["blocks"].append({"id": "p2-1", "type": "para", "page": 2,
+                                          "en": "Text of page 2.", "zh": "第二页译文。"})
 
         def run(cfg, prompt, cwd, images=None, cancel=None):
             prompts_seen.append(prompt)
@@ -292,7 +296,7 @@ class EnrichPagesTest(unittest.TestCase):
         reply = {"blocks": [{"id": "nope", "highlights": [{"category": "method", "quote": "x", "occurrence": 0}]}]}
         with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(reply))):
             failed = translate.enrich_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
-        self.assertEqual(failed, {})
+        self.assertEqual(list(failed), [1])
         self.assertNotIn("highlights", self.ws.load("paper")["blocks"][0])
 
 
@@ -327,7 +331,7 @@ class InsightsTest(unittest.TestCase):
         out = reading.merge_insights(a, b)
         self.assertEqual(len(out), 2)
         hit = out[0]
-        self.assertEqual(hit["status"], "supported")  # 就高不就低
+        self.assertEqual(hit["status"], "provisional")  # 没有直接引文，不能升级成已支持
         self.assertEqual(len(hit["source_refs"]), 2)  # 两处出处都留
         self.assertTrue(hit["id"])
 
@@ -346,8 +350,10 @@ class GuideTest(unittest.TestCase):
     def paper(self, insights, done=(1, 2), analyzed=(1, 2)):
         reading_state = {"insights": insights,
                          "pages": {str(p): {"status": "completed"} for p in analyzed}}
-        return {"meta": {"page_count": 2}, "translation": {"done_pages": list(done)},
-                "reading": reading_state, "blocks": []}
+        paper = {"meta": {"page_count": 2}, "translation": {"done_pages": list(done)},
+                 "reading": reading_state, "blocks": [{"id": f"p{p}-1", "page": p, "type": "para", "en": "x", "zh": "译文"} for p in (1, 2)]}
+        reading.apply_reading_state(paper, list(analyzed), "completed", True)
+        return paper
 
     def test_rebuild_guide_groups_and_coverage(self):
         p = self.paper([
@@ -373,10 +379,11 @@ class GuideTest(unittest.TestCase):
         p = self.paper([{"id": "i1", "type": "innovation", "content": "a", "page": 1, "block": "p1-1", "status": "provisional"}])
         relations = [{"from": "i1", "to": "i2", "content": "x"},  # i2 不存在，丢弃
                      {"from": "i1", "to": "i1", "content": "方法支撑问题"}]
-        reading.apply_synthesis(p, "一句话总结。", relations, {"i1": "supported", "i9": "unsupported"})
+        refs = [{"page": 1, "block": "p1-1", "source_quote": "x"}]
+        reading.apply_synthesis(p, "一句话总结。", relations, [{"insight": "i1", "status": "supported", "source_refs": refs}], summary_refs=refs)
         g = p["reading_guide"]
         self.assertEqual(g["summary"], "一句话总结。")
-        self.assertEqual(len(g["relations"]), 1)
+        self.assertEqual(len(g["relations"]), 0)  # 无来源关系和自连关系均不展示
         self.assertEqual(p["reading"]["insights"][0]["status"], "supported")
         self.assertTrue(g["synth_of"])
 
@@ -403,7 +410,7 @@ class GuideIntegrationTest(unittest.TestCase):
                    "insights": [{"type": "problem", "content": "如何提升效率？", "block": "p1-1", "status": "provisional"},
                                 {"type": "method", "content": "提出新方法。", "block": "p1-1", "status": "provisional"},
                                 {"type": "evidence", "content": "实验证明有效。", "block": "p2-1", "status": "supported"}]}
-        synth = {"summary": "本文提出新方法提升效率。",
+        synth = {"summary": "本文提出新方法提升效率。", "summary_refs": [{"page": 1, "block": "p1-1", "source_quote": "Text of page 1."}],
                  "relations": [{"from": "i1-xxxxxx", "to": "i2-yyyyyy", "content": "问题由方法解决"}],
                  "checks": []}
         calls = []
@@ -433,14 +440,15 @@ class GuideIntegrationTest(unittest.TestCase):
     def test_finalize_synthesizes_partial_scope(self):
         reply = {"blocks": [{"id": "p1-1", "type": "para", "page": 1, "en": "x", "zh": "我们提出新方法。"}],
                  "insights": [{"type": "problem", "content": "如何提升效率？", "block": "p1-1", "status": "provisional"}]}
-        synth = {"summary": "范围总结。", "relations": [], "checks": []}
+        synth = {"summary": "范围总结。", "summary_refs": [{"page": 1, "block": "p1-1", "source_quote": "Text of page 1."}], "relations": [], "checks": []}
         with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(reply))):
-            translate.translate_pages(self.ws, self.cfg, [1], threading.Event(), lambda *a: None)
+            translate.translate_pages(self.ws, dict(self.cfg, _target_pages=[1], _scope="first:1"), [1], threading.Event(), lambda *a: None)
         with mock.patch.object(engines, "run", mock.Mock(return_value=json.dumps(synth))):
             self.assertTrue(translate.finalize_reading(self.ws, self.cfg, None))  # 选定范围（已译页）完成即综合
         guide = self.ws.load("paper")["reading_guide"]
         self.assertEqual(guide["status"], "complete")
         self.assertEqual(guide["coverage"]["translated"], [1])  # 但覆盖范围如实记录：只译了 1/2 页
+        self.assertFalse(guide["coverage"]["full_complete"])
         self.assertEqual(guide["summary"], "范围总结。")
 
 

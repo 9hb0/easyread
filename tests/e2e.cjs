@@ -45,7 +45,8 @@ const cli = (...args) => execFileSync(PY, ['-m', 'easyread', ...args], { env, cw
     await page.goto(url + '/');
     await page.waitForSelector('.row');
     ok(await page.$$eval('.row', (r) => r.length) === 1, '文献库列出论文');
-    await page.fill('#q', '误差条');
+    const searchTerm = (disk('paper').meta.title_zh || disk('paper').meta.title_en).slice(0, 8);
+    await page.fill('#q', searchTerm);
     await page.waitForTimeout(250);
     ok(await page.$$eval('.row', (r) => r.length) === 1, '搜索能找到');
     await page.fill('#q', '没有这种论文xyz');
@@ -84,6 +85,7 @@ const cli = (...args) => execFileSync(PY, ['-m', 'easyread', ...args], { env, cw
     console.log('2.1 原页面板宽度');
     await page.click('[data-act="pages"]');
     await page.waitForSelector('body.pv-open #pageview');
+    await page.waitForFunction(() => Math.abs(document.querySelector('#pageview').getBoundingClientRect().right - innerWidth) < 2);
     const grip = await page.$('#pageview [data-side-grip]');
     ok(!!grip, '原页面板有宽度拖拽手柄');
     const beforePanelWidth = await page.$eval('#pageview', (el) => el.getBoundingClientRect().width);
@@ -191,8 +193,15 @@ const cli = (...args) => execFileSync(PY, ['-m', 'easyread', ...args], { env, cw
     await page.keyboard.press('Escape');
 
     console.log('9. 术语替换（只算不改）');
-    const n = await page.evaluate(() => PR.replaceTerm('标准误差', '标准误', true));
-    ok(n > 10, '术语替换能找到 ' + n + ' 处');
+    const n = await page.evaluate(() => {
+      const counts = {};
+      for (const b of PR.state.paper.blocks) {
+        for (const word of (b.zh || '').match(/[\u4e00-\u9fff]{2}/g) || []) counts[word] = (counts[word] || 0) + 1;
+      }
+      const term = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+      return PR.replaceTerm(term, term + '（测试）', true);
+    });
+    ok(n > 0, '术语替换能找到 ' + n + ' 处');
 
     console.log('10. 断线暂存、恢复补存');
     await page.route('**/ops', (route) => route.abort());

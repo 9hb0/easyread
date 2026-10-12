@@ -6,11 +6,13 @@
 """
 from __future__ import annotations
 
+import copy
 import json
+import re
 
 from .store import now_iso, text_hash
 
-READING_VERSION = 1
+READING_VERSION = 2
 
 # 顺序即前端筛选按钮顺序；颜色集中定义在 web/css/base.css 的 --sem-* 变量
 CATEGORIES = {
@@ -49,6 +51,7 @@ INSIGHT_TYPES = {
 }
 
 INSIGHT_STATUSES = ("provisional", "supported", "unsupported")
+RELATION_STATUSES = INSIGHT_STATUSES
 GUIDE_GROUPS = (("background", "background"), ("related_work", "related_work"), ("problems", "problem"),
                 ("methods", "method"), ("innovations", "innovation"), ("evidence", "evidence"),
                 ("limitations", "limitation"))
@@ -75,9 +78,43 @@ def page_hash(blocks: list, page: int) -> str:
     return text_hash(page_text(blocks, page))
 
 
+def _cell_string(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        if value == 0:
+            return "0"
+        magnitude = abs(value)
+        if value.is_integer() and magnitude < 1e21:
+            return str(int(value))
+        if 1e-6 <= magnitude < 1e21:
+            return format(value, ".15f").rstrip("0").rstrip(".")
+        mantissa, exponent = format(value, ".15e").split("e")
+        mantissa = mantissa.rstrip("0").rstrip(".")
+        return f"{mantissa}e{int(exponent):+d}"
+    return str(value)
+
+
+def page_content_hash(blocks: list, page: int) -> str:
+    """Bind formulas, table values, block identities and English sources as well as prose."""
+    records = []
+    for block in blocks:
+        if block.get("page") != page:
+            continue
+        fields = [_cell_string(block.get("id")), _cell_string(block.get("type")), block_zh(block),
+                  _cell_string(block.get("tex")), _cell_string(block.get("tag")), _source_text(block)]
+        if block.get("type") == "table":
+            for row in (block.get("head") or []) + (block.get("rows") or []):
+                fields.append("␟".join(_cell_string(cell) for cell in row))
+        records.append("␟".join(fields))
+    return text_hash("␞".join(records))
+
+
 def locate_quote(text: str, quote: str, occurrence: int) -> tuple[int, int] | None:
     """quote 在 text 里第 occurrence 次出现（从 0 数）的区间；找不到返回 None。"""
-    if not quote or occurrence is None or occurrence < 0:
+    if not isinstance(text, str) or not isinstance(quote, str) or not quote or type(occurrence) is not int or occurrence < 0:
         return None
     start = -1
     for _ in range(occurrence + 1):
@@ -85,6 +122,102 @@ def locate_quote(text: str, quote: str, occurrence: int) -> tuple[int, int] | No
         if start < 0:
             return None
     return (start, start + len(quote))
+
+
+def _plain_spans(block: dict) -> list[tuple[int, int]]:
+    """可标注的原始字符区间；列表项和数学片段各自构成边界。"""
+    texts = ([str(it.get("zh") or "") for it in block.get("items") or []]
+             if block.get("type") == "list" else [block_zh(block)])
+    spans, offset = [], 0
+    for text in texts:
+        cursor = 0
+        while cursor < len(text):
+            marker = re.search(r"(?<!\\)\$\$|(?<!\\)\$|\\\(|\\\[", text[cursor:])
+            if marker is None:
+                spans.append((offset + cursor, offset + len(text)))
+                break
+            start = cursor + marker.start()
+            if start > cursor:
+                spans.append((offset + cursor, offset + start))
+            opening = marker.group()
+            closing = {r"\(": r"\)", r"\[": r"\]"}.get(opening, opening)
+            end = text.find(closing, start + len(opening))
+            while end > 0 and closing.startswith("$") and text[end - 1] == "\\":
+                end = text.find(closing, end + len(closing))
+            cursor = len(text) if end < 0 else end + len(closing)
+        offset += len(text) + 1
+    return spans
+
+
+def _locate_in_block(block: dict, quote: str, occurrence: int) -> tuple[int, int] | None:
+    span = locate_quote(block_zh(block), quote, occurrence)
+    return span if span and any(s <= span[0] and span[1] <= e for s, e in _plain_spans(block)) else None
+
+
+def _source_text(block: dict) -> str:
+    """优先使用 normalizer 保存的原文字串，避免信任模型改写的 en。"""
+    if "source_en" in block:
+        return block["source_en"] if isinstance(block["source_en"], str) else ""
+    if block.get("type") == "list":
+        return "\n".join(str(it.get("en") or "") for it in block.get("items") or [])
+    key = "caption_en" if block.get("type") in ("table", "figure") else "en"
+    return block.get(key) if isinstance(block.get(key), str) else ""
+
+
+def _unique_refs(refs: list[dict]) -> list[dict]:
+    out = []
+    for ref in refs:
+        if ref not in out:
+            out.append(copy.deepcopy(ref))
+    return out
+
+
+def validate_source_refs(refs, blocks: list[dict], default_block: dict | None = None) -> tuple[list[dict], list[str]]:
+    """校验实际页面、块及英文连续短引文。旧数据可保留所属块的定位引用。"""
+    if refs is None:
+        return [], []
+    if not isinstance(refs, list):
+        return [], ["source_refs 不是数组"]
+    known = {b.get("id"): b for b in blocks if isinstance(b.get("id"), str)}
+    out, problems = [], []
+    for ref in refs:
+        if not isinstance(ref, dict):
+            problems.append("来源引用不是对象")
+            continue
+        bid = ref.get("block", ref.get("block_id"))
+        page = ref.get("page")
+        target = known.get(bid) if isinstance(bid, str) else None
+        if not target or type(page) is not int or page <= 0 or target.get("page") != page:
+            problems.append(f"来源引用的页码或块不存在：{str(bid)[:40]}")
+            continue
+        if "block_id" in ref and ref["block_id"] != bid:
+            problems.append(f"来源引用的块不一致：{bid}")
+            continue
+        normalized = {"page": page, "block": bid}
+        quotes = [key for key in ("source_quote", "quote") if key in ref]
+        if not quotes:
+            if default_block and default_block.get("id") == bid and default_block.get("page") == page:
+                out.append(normalized)
+            else:
+                problems.append(f"来源引用缺少英文引文：{bid}")
+            continue
+        source = _source_text(target)
+        if any(not isinstance(ref[key], str) or not ref[key].strip() or len(ref[key]) > 300 or ref[key] not in source
+               for key in quotes):
+            problems.append(f"来源引文无法在英文原文中定位：{bid}")
+            continue
+        if len(quotes) == 2 and ref["source_quote"] != ref["quote"]:
+            problems.append(f"来源引用的两条引文不一致：{bid}")
+            continue
+        normalized.update({key: ref[key] for key in quotes})
+        out.append(normalized)
+    return _unique_refs(out), problems
+
+
+def _has_evidence(refs: list[dict]) -> bool:
+    return any(type(ref.get("page")) is int and isinstance(ref.get("block"), str)
+               and any(isinstance(ref.get(k), str) and ref[k].strip() for k in ("source_quote", "quote"))
+               for ref in refs)
 
 
 def validate_highlights(blocks: list[dict]) -> list[str]:
@@ -100,32 +233,42 @@ def validate_highlights(blocks: list[dict]) -> list[str]:
             problems.append(f"{bid}：highlights 不是数组")
             b.pop("highlights", None)
             continue
-        text = block_zh(b)
-        kept: list[dict] = []
-        used: list[tuple[int, int]] = []
+        candidates: list[tuple[dict, tuple[int, int]]] = []
         for h in raw:
             if not isinstance(h, dict):
                 problems.append(f"{bid}：高亮不是对象：{str(h)[:60]}")
                 continue
             cat = h.get("category")
-            quote = str(h.get("quote") or "")
-            if cat not in CATEGORIES:
+            quote = h.get("quote")
+            if not isinstance(b.get("id"), str) or not b["id"] or h.get("block_id", b["id"]) != b["id"]:
+                problems.append(f"{bid}：高亮 block_id 与所属块不一致")
+                continue
+            if not isinstance(cat, str) or cat not in CATEGORIES:
                 problems.append(f"{bid}：高亮类别不合法：{str(cat)[:40]}")
                 continue
-            try:
-                occ = int(h.get("occurrence") or 0)
-            except (TypeError, ValueError):
+            occ = h.get("occurrence", 0)
+            if type(occ) is not int:
                 problems.append(f"{bid}：高亮 occurrence 不是整数")
                 continue
-            span = locate_quote(text, quote, occ) if text else None
+            span = _locate_in_block(b, quote, occ)
             if span is None:
-                problems.append(f"{bid}：高亮引文无法在该块译文中定位：{quote[:40]}")
+                problems.append(f"{bid}：高亮引文无法在兼容的译文片段中定位：{str(quote)[:40]}")
                 continue
-            if any(span[0] < e and s < span[1] for s, e in used):
-                problems.append(f"{bid}：高亮与其他高亮重叠：{quote[:40]}")
+            if any(span == previous and cat == item["category"] for item, previous in candidates):
                 continue
-            used.append(span)
-            kept.append({"id": f"h-{bid}-{len(kept)}", "category": cat, "quote": quote, "occurrence": occ})
+            candidates.append(({"block_id": bid, "category": cat, "quote": quote, "occurrence": occ}, span))
+        conflicts = set()
+        for k, (_, (s, e)) in enumerate(candidates):
+            for j in range(k):
+                a, z = candidates[j][1]
+                if s < z and a < e:
+                    conflicts.update((j, k))
+        kept = []
+        for k, (item, _) in enumerate(candidates):
+            if k in conflicts:
+                problems.append(f"{bid}：高亮与其他高亮重叠：{item['quote'][:40]}")
+                continue
+            kept.append({"id": f"h-{bid}-{len(kept)}", **item})
         if kept:
             b["highlights"] = kept
         else:
@@ -147,31 +290,49 @@ def validate_annotations(blocks: list[dict]) -> list[str]:
             problems.append(f"{bid}：annotations 不是数组")
             b.pop("annotations", None)
             continue
-        text = block_zh(b)
         kept: list[dict] = []
         for a in raw:
             if not isinstance(a, dict):
                 problems.append(f"{bid}：批注不是对象：{str(a)[:60]}")
                 continue
             typ = a.get("type")
-            if typ not in ANNOTATION_TYPES:
+            if not isinstance(b.get("id"), str) or not b["id"] or a.get("block_id", b["id"]) != b["id"]:
+                problems.append(f"{bid}：批注 block_id 与所属块不一致")
+                continue
+            if not isinstance(typ, str) or typ not in ANNOTATION_TYPES:
                 problems.append(f"{bid}：批注类别不合法：{str(typ)[:40]}")
                 continue
-            content = str(a.get("content") or "").strip()
+            content = a.get("content")
+            content = content.strip() if isinstance(content, str) else ""
             if not content or len(content) > 600:
                 problems.append(f"{bid}：批注内容为空或超长")
                 continue
             basis = a.get("basis") or "ai_explanation"
-            if basis not in BASES:
+            if not isinstance(basis, str) or basis not in BASES:
                 problems.append(f"{bid}：批注依据不合法：{str(basis)[:40]}")
                 continue
-            quote = str(a.get("anchor_quote") or "")
-            if quote and (not text or locate_quote(text, quote, 0) is None):
-                problems.append(f"{bid}：批注锚点无法定位：{quote[:40]}")
+            quote = a.get("anchor_quote", "")
+            occ = a.get("occurrence", 0)
+            if type(occ) is not int or occ < 0 or not isinstance(quote, str) or (not quote and occ != 0):
+                problems.append(f"{bid}：批注锚点或 occurrence 不合法")
                 continue
-            ann = {"id": f"a-{bid}-{len(kept)}", "type": typ, "content": content, "basis": basis}
+            if quote and _locate_in_block(b, quote, occ) is None:
+                problems.append(f"{bid}：批注锚点无法在兼容片段中定位：{quote[:40]}")
+                continue
+            raw_refs = a.get("source_refs")
+            if raw_refs is None or raw_refs == []:
+                raw_refs = [{"page": b.get("page"), "block": bid}]
+            refs, issues = validate_source_refs(raw_refs, blocks, default_block=b)
+            if issues or not refs:
+                problems.extend(f"{bid}：{issue}" for issue in issues or ["批注缺少来源引用"])
+                continue
+            ann = {"id": f"a-{bid}-{len(kept)}", "block_id": bid, "type": typ, "content": content,
+                   "basis": basis, "occurrence": occ, "source_refs": refs}
             if quote:
                 ann["anchor_quote"] = quote
+            if any({k: v for k, v in item.items() if k != "id"} == {k: v for k, v in ann.items() if k != "id"}
+                   for item in kept):
+                continue
             kept.append(ann)
         if kept:
             b["annotations"] = kept
@@ -193,28 +354,46 @@ def validate_insights(insights, blocks: list[dict]) -> tuple[list[dict], list[st
         return out, problems
     if not isinstance(insights, list):
         return out, ["insights 不是数组"]
-    pages = {b.get("id"): b.get("page") for b in blocks}
+    known = {b.get("id"): b for b in blocks if isinstance(b.get("id"), str)}
     for it in insights:
         if not isinstance(it, dict):
             problems.append(f"研究要点不是对象：{str(it)[:60]}")
             continue
         typ = it.get("type")
-        if typ not in INSIGHT_TYPES:
+        if not isinstance(typ, str) or typ not in INSIGHT_TYPES:
             problems.append(f"研究要点类型不合法：{str(typ)[:40]}")
             continue
-        content = str(it.get("content") or "").strip()
+        content = it.get("content")
+        content = content.strip() if isinstance(content, str) else ""
         if not content or len(content) > 300:
             problems.append(f"研究要点内容为空或超长：{content[:40]}")
             continue
-        block = str(it.get("block") or "")
-        if block not in pages:
-            problems.append(f"研究要点引用的块不在本批：{block}")
+        bid = it.get("block", it.get("block_id"))
+        owner = known.get(bid) if isinstance(bid, str) else None
+        if bid is not None and not owner:
+            problems.append(f"研究要点引用的块不在本批：{str(bid)[:40]}")
             continue
         status = it.get("status") or "provisional"
         if status not in INSIGHT_STATUSES:
             problems.append(f"研究要点状态不合法：{str(status)[:40]}")
             continue
-        out.append({"type": typ, "content": content, "block": block, "page": pages[block], "status": status})
+        raw_refs = it.get("source_refs")
+        if (raw_refs is None or raw_refs == []) and owner:
+            raw_refs = [{"page": owner.get("page"), "block": bid}]
+        refs, issues = validate_source_refs(raw_refs, blocks, default_block=owner)
+        if issues or not refs:
+            problems.extend(issues or ["研究要点缺少有效来源引用"])
+            continue
+        if not owner:
+            bid = refs[0]["block"]
+            owner = known[bid]
+        if "page" in it and it["page"] != owner.get("page"):
+            problems.append(f"研究要点的页码与所属块不一致：{bid}")
+            continue
+        if status == "supported" and not _has_evidence(refs):
+            status = "provisional"
+        out.append({"type": typ, "content": content, "block": bid, "page": owner.get("page"),
+                    "status": status, "source_refs": refs})
     return out, problems
 
 
@@ -223,37 +402,80 @@ def _norm_key(s: str) -> str:
 
 
 def merge_insights(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """并入一批研究要点：同类型同内容（忽略空白和标点）的合并 source_refs，状态就高不就低。"""
+    """幂等合并已校验要点，保留每条精确引用；没有引文不能晋升 supported。"""
     rank = {"unsupported": 0, "provisional": 1, "supported": 2}
-    out = list(existing or [])
-    index = {(_norm_key(i.get("content")), i.get("type")): i for i in out}
-    for it in incoming or []:
+    out, index = [], {}
+    for raw in list(existing or []) + list(incoming or []):
+        it = copy.deepcopy(raw)
+        refs = it.get("source_refs")
+        if refs is None:
+            refs = [{"page": it.get("page"), "block": it.get("block")}]
+        refs = _unique_refs([r for r in refs or [] if isinstance(r, dict)])
+        it["source_refs"] = refs
+        if it.get("status") not in INSIGHT_STATUSES or (it.get("status") == "supported" and not _has_evidence(refs)):
+            it["status"] = "provisional"
         key = (_norm_key(it.get("content")), it.get("type"))
         hit = index.get(key)
         if hit:
-            refs = hit.setdefault("source_refs", [{"page": hit.get("page"), "block": hit.get("block")}])
-            ref = {"page": it.get("page"), "block": it.get("block")}
-            if ref not in refs:
-                refs.append(ref)
+            hit["source_refs"] = _unique_refs(hit["source_refs"] + refs)
             if rank.get(it.get("status"), 1) > rank.get(hit.get("status"), 1):
                 hit["status"] = it["status"]
             continue
-        item = dict(it)
-        item["id"] = ""
-        item["source_refs"] = [{"page": it.get("page"), "block": it.get("block")}]
-        out.append(item)
-        index[key] = item
+        out.append(it)
+        index[key] = it
+    used_ids = {i.get("id") for i in out if i.get("id")}
     for k, i in enumerate(out):
         if not i.get("id"):
-            i["id"] = f"i{k + 1}-{text_hash(i['content'])[:6]}"
+            serial = k + 1
+            iid = f"i{serial}-{text_hash(i['content'])[:6]}"
+            while iid in used_ids:
+                serial += 1
+                iid = f"i{serial}-{text_hash(i['content'])[:6]}"
+            i["id"] = iid
+            used_ids.add(iid)
     return out
 
 
 def drop_insights_on_pages(insights: list[dict], pages: list[int]) -> list[dict]:
-    """重译某几页后，来源全部落在这些页上的旧研究要点作废。"""
+    """移除受影响页的每条引用，跨页要点重新定位并降回候选状态。"""
     drop = set(pages)
-    return [i for i in insights or []
-            if not all(r.get("page") in drop for r in i.get("source_refs") or [{"page": i.get("page")}])]
+    out = []
+    for raw in insights or []:
+        refs = raw.get("source_refs") or [{"page": raw.get("page"), "block": raw.get("block")}]
+        kept = [r for r in refs if r.get("page") not in drop]
+        if not kept:
+            continue
+        item = copy.deepcopy(raw)
+        item["source_refs"] = _unique_refs(kept)
+        if len(kept) != len(refs):
+            item["page"], item["block"] = kept[0].get("page"), kept[0].get("block")
+            if item.get("status") == "supported":
+                item["status"] = "provisional"
+        out.append(item)
+    return out
+
+
+def _pages(values) -> list[int]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    return sorted({int(p) for p in values if type(p) is int and p > 0
+                   or isinstance(p, str) and p.isdigit() and int(p) > 0})
+
+
+def _state_current(paper: dict, page: int) -> bool:
+    state = ((paper.get("reading") or {}).get("pages") or {}).get(str(page)) or {}
+    source = ((paper.get("translation") or {}).get("source_versions") or {}).get(str(page))
+    return (state.get("status") == "completed" and state.get("version") == READING_VERSION
+            and state.get("zh_hash") == page_hash(paper.get("blocks") or [], page)
+            and state.get("content_hash") == page_content_hash(paper.get("blocks") or [], page)
+            and "source_version" in state and state["source_version"] == source)
+
+
+def invalidate_synthesis(paper: dict) -> None:
+    """来源或要点变动后，清除旧综合中的结论及核验引用。"""
+    guide = paper.get("reading_guide") or {}
+    for key in ("summary", "summary_refs", "relations", "checks", "synth_of", "updated"):
+        guide.pop(key, None)
 
 
 def rebuild_guide(paper: dict) -> None:
@@ -261,15 +483,28 @@ def rebuild_guide(paper: dict) -> None:
     reading = paper.setdefault("reading", {})
     insights = reading.get("insights") or []
     guide = paper.setdefault("reading_guide", {})
+    if guide.get("synth_of") != insights_hash(paper):
+        invalidate_synthesis(paper)
     guide["version"] = READING_VERSION
     for key, typ in GUIDE_GROUPS:
-        guide[key] = [i["id"] for i in insights if i.get("type") == typ]
-    done = sorted({int(p) for p in paper.get("translation", {}).get("done_pages", [])})
-    states = reading.get("pages") or {}
-    analyzed = [p for p in done if (states.get(str(p)) or {}).get("status") == "completed"]
+        guide[key] = [i["id"] for i in insights if i.get("type") == typ and i.get("id")]
+    meta, tr = paper.get("meta") or {}, paper.get("translation") or {}
+    count = meta.get("page_count")
+    metadata_pages = _pages([p.get("n") for p in meta.get("pages") or [] if isinstance(p, dict)])
+    total = max(count if type(count) is int and count > 0 else 0, max(metadata_pages, default=0))
+    full = set(range(1, total + 1))
+    done = _pages(tr.get("done_pages"))
+    analyzed = [p for p in done if (not total or p in full) and _state_current(paper, p)]
+    requested = tr.get("requested_scope") or ("pages" if tr.get("target_pages") else "all")
+    is_full = requested in ("all", "全文", "full")
+    target = sorted(full) if is_full else _pages(tr.get("target_pages")) or sorted(full)
+    full_complete = bool(total and full.issubset(analyzed))
+    range_complete = bool(target and set(target).issubset(analyzed))
+    complete = full_complete if is_full else range_complete
     guide["coverage"] = {"analyzed": analyzed, "translated": done,
-                         "total": paper.get("meta", {}).get("page_count") or 0}
-    guide["status"] = "complete" if (analyzed and analyzed == done) else ("partial" if analyzed else "pending")
+                         "total": total, "target_pages": target, "excluded_pages": sorted(full - set(target)),
+                         "scope": requested, "range_complete": range_complete, "full_complete": full_complete}
+    guide["status"] = "complete" if complete else ("partial" if analyzed else "pending")
 
 
 def insights_hash(paper: dict) -> str:
@@ -277,21 +512,81 @@ def insights_hash(paper: dict) -> str:
     return text_hash(json.dumps(insights, ensure_ascii=False, sort_keys=True))
 
 
-def apply_synthesis(paper: dict, summary: str, relations: list[dict], statuses: dict) -> None:
-    """一次模型综合的结果写回：关系的两端必须是已有 insight，状态覆盖只认合法值。"""
-    reading = paper.setdefault("reading", {})
-    ids = {i.get("id") for i in reading.get("insights") or []}
-    relations = [r for r in relations or []
-                 if isinstance(r, dict) and r.get("from") in ids and r.get("to") in ids and str(r.get("content") or "").strip()]
-    for i in reading.get("insights") or []:
-        if i.get("id") in statuses:
-            i["status"] = statuses[i["id"]]
-    guide = paper.setdefault("reading_guide", {})
-    if summary:
-        guide["summary"] = summary
-    guide["relations"] = relations
-    guide["synth_of"] = insights_hash(paper)
-    guide["updated"] = now_iso()
+def apply_synthesis(paper: dict, summary: str, relations: list[dict], statuses,
+                    summary_refs=None, expected_hash=None) -> dict:
+    """保存有原文引用的综合；校验只证明引文可定位，不代表科学主张已获证明。"""
+    if expected_hash is not None and expected_hash != insights_hash(paper):
+        return {"stale": True}
+    insights = (paper.get("reading") or {}).get("insights") or []
+    by_id = {i["id"]: i for i in insights if isinstance(i.get("id"), str) and i["id"]}
+    blocks = paper.get("blocks") or []
+    known_blocks = {b.get("id"): b for b in blocks if isinstance(b.get("id"), str)}
+    endpoint_sources = {}
+    for iid, item in by_id.items():
+        owner = known_blocks.get(item.get("block")) if isinstance(item.get("block"), str) else None
+        raw_refs = item.get("source_refs")
+        if not raw_refs and owner:
+            raw_refs = [{"page": owner.get("page"), "block": owner["id"]}]
+        refs, _ = validate_source_refs(raw_refs, blocks, default_block=owner)
+        endpoint_sources[iid] = {(r["page"], r["block"]) for r in refs}
+    if isinstance(statuses, dict):
+        checks = statuses.get("checks") if isinstance(statuses.get("checks"), list) else [
+            {"insight": iid, "status": status} if not isinstance(status, dict) else {**status, "insight": iid}
+            for iid, status in statuses.items()]
+    else:
+        checks = statuses if isinstance(statuses, list) else []
+    accepted_checks = []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        iid, status = check.get("insight"), check.get("status")
+        item = by_id.get(iid) if isinstance(iid, str) else None
+        if not item or status not in INSIGHT_STATUSES:
+            continue
+        refs, issues = validate_source_refs(check.get("source_refs", item.get("source_refs")), blocks)
+        if status == "supported" and (issues or not _has_evidence(refs)):
+            continue
+        if "source_refs" in check and issues:
+            continue
+        item["status"] = status
+        if refs:
+            item["source_refs"] = refs
+        accepted_checks.append({"insight": iid, "status": status, "source_refs": refs})
+    accepted_relations = []
+    for relation in relations if isinstance(relations, list) else []:
+        if not isinstance(relation, dict):
+            continue
+        start, end, content = relation.get("from"), relation.get("to"), relation.get("content")
+        status = relation.get("status", "provisional")
+        if (not isinstance(start, str) or not isinstance(end, str) or start not in by_id or end not in by_id
+                or start == end or not isinstance(content, str) or not content.strip() or status not in RELATION_STATUSES):
+            continue
+        refs, issues = validate_source_refs(relation.get("source_refs"), blocks)
+        if issues or not _has_evidence(refs):
+            continue
+        cited_sources = {(r["page"], r["block"]) for r in refs}
+        if not all(cited_sources & endpoint_sources[iid] for iid in (start, end)):
+            continue
+        accepted_relations.append({"from": start, "to": end, "content": content.strip(),
+                                   "status": status, "source_refs": refs})
+    refs, issues = validate_source_refs(summary_refs, blocks)
+    valid_summary = isinstance(summary, str) and bool(summary.strip()) and not issues and _has_evidence(refs)
+    rebuild_guide(paper)
+    guide = paper["reading_guide"]
+    if valid_summary:
+        guide["summary"], guide["summary_refs"] = summary.strip(), refs
+    elif summary:
+        guide.pop("summary", None)
+        guide.pop("summary_refs", None)
+    guide["relations"] = _unique_refs(accepted_relations)
+    guide["checks"] = accepted_checks
+    if valid_summary or accepted_relations or accepted_checks:
+        guide["synth_of"] = insights_hash(paper)
+        guide["updated"] = now_iso()
+    else:
+        guide.pop("synth_of", None)
+        guide.pop("updated", None)
+    return {"stale": False}
 
 
 def reading_pages(blocks: list[dict]) -> set[int]:
@@ -301,16 +596,8 @@ def reading_pages(blocks: list[dict]) -> set[int]:
 
 def pages_needing_reading(paper: dict, only_missing: bool = True) -> list[int]:
     """已翻译但缺精读的页：没记过状态、failed、stale；only_missing=False 时全部已译页都要。"""
-    done = sorted({int(p) for p in paper.get("translation", {}).get("done_pages", [])})
-    states = (paper.get("reading") or {}).get("pages") or {}
-    out = []
-    for p in done:
-        status = (states.get(str(p)) or {}).get("status")
-        if not status or status in ("failed", "stale", "pending"):
-            out.append(p)
-        elif not only_missing:
-            out.append(p)
-    return out
+    done = _pages((paper.get("translation") or {}).get("done_pages"))
+    return [p for p in done if not only_missing or not _state_current(paper, p)]
 
 
 def apply_reading_state(paper: dict, pages: list[int], status, enabled: bool) -> None:
@@ -322,7 +609,12 @@ def apply_reading_state(paper: dict, pages: list[int], status, enabled: bool) ->
     states = reading.setdefault("pages", {})
     blocks = paper.get("blocks", [])
     for p in pages:
-        st = status.get(p, status) if isinstance(status, dict) else status
+        st = status.get(p, status.get(str(p), "pending")) if isinstance(status, dict) else status
+        if st not in ("pending", "completed", "failed", "skipped", "stale"):
+            st = "pending"
         hl = sum(len(b.get("highlights") or []) for b in blocks if b.get("page") == p)
         ann = sum(len(b.get("annotations") or []) for b in blocks if b.get("page") == p)
-        states[str(p)] = {"status": st, "zh_hash": page_hash(blocks, p), "highlights": hl, "annotations": ann}
+        source_version = ((paper.get("translation") or {}).get("source_versions") or {}).get(str(p))
+        states[str(p)] = {"status": st, "version": READING_VERSION, "zh_hash": page_hash(blocks, p),
+                          "content_hash": page_content_hash(blocks, p),
+                          "source_version": source_version, "highlights": hl, "annotations": ann}
