@@ -1,5 +1,25 @@
 """翻译 / 对话引擎的 API 预设：服务商、地址、推荐模型。"""
 
+# 官方 Go 接口表（2026-10-13）：Go 把模型分在三套协议上，这里按协议分组。
+# https://opencode.ai/v2/docs/console/go/#endpoints
+OPENCODE_GO_CHAT_MODELS = [
+    "glm-5.3-flash", "glm-5.3", "glm-5.2", "kimi-k3", "kimi-k2.7-code", "kimi-k2.6",
+    "deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
+    "mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.5", "mimo-v2.5-pro", "longcat-2.0",
+    "hy4-preview", "hy3", "space-bunny", "longcat-2.5-preview-free", "step-5-preview-free",
+]
+OPENCODE_GO_RESPONSES_MODELS = [
+    "gpt-6-luna", "gpt-5.6-luna", "grok-4.7", "grok-4.6",
+    "muse-spark-1.3-contributor", "muse-spark-1.2-contributor",
+]
+OPENCODE_GO_MESSAGES_MODELS = [
+    "claude-haiku-5-5", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "minimax-m3", "minimax-m2.7",
+]
+OPENCODE_GO_MODELS = OPENCODE_GO_CHAT_MODELS + OPENCODE_GO_RESPONSES_MODELS + OPENCODE_GO_MESSAGES_MODELS
+OPENCODE_GO_VISION_MODELS = {
+    "deepseek-v4-flash-vision-exp", "gpt-6-luna", "gpt-5.6-luna", "grok-4.7", "grok-4.6", "claude-haiku-5-5",
+}
+
 # 常见的 OpenAI 兼容服务。group：local 本机开源模型 / free 有免费模型或免费额度 / paid 付费。
 # models 是推荐的模型名（设置页里可选，也能手填）。模型名和免费政策会变，以服务商页面为准。
 PRESETS = [
@@ -39,9 +59,9 @@ PRESETS = [
     {"id": "ark-coding", "group": "paid", "name": "火山方舟 Coding Plan", "base_url": "https://ark.cn-beijing.volces.com/api/coding/v3", "model": "ark-code-latest", "key": True,
      "models": ["ark-code-latest", "doubao-seed-2.1-pro", "doubao-seed-2.1-lite", "doubao-seed-evolving", "kimi-k3", "kimi-k2.8-preview", "glm-5.3", "glm-5.3-flash", "deepseek-v4.1-flash", "deepseek-v4-pro"],
      "key_url": "https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey", "note": "订阅制编程套餐，用套餐专属 API Key；填 ark-code-latest 可在方舟控制台切换模型。"},
-    {"id": "opencode-go", "group": "paid", "name": "OpenCode Go", "base_url": "https://opencode.ai/zen/go/v1", "model": "grok-code", "key": True,
-     "models": ["grok-code", "qwen3-coder", "claude-sonnet-4-5", "gpt-5-mini"], "key_url": "https://opencode.ai/auth", "vision": True,
-     "note": "订阅制套餐，走 OpenAI 兼容的 chat/completions；能看图。"},
+    {"id": "opencode-go", "group": "paid", "name": "OpenCode Go", "base_url": "https://opencode.ai/inference/go/v1", "model": "glm-5.3-flash", "key": True,
+     "models": OPENCODE_GO_MODELS, "key_url": "https://opencode.ai/auth", "vision": False,
+     "note": "订阅制套餐，GLM / Kimi / DeepSeek / GPT / Claude / Grok / Qwen / MiniMax 都能用，程序按模型自动切换接口。默认模型只发文字；换成 GPT、Claude Haiku、Grok 或 DeepSeek Vision 时可勾“模型能看图”。"},
     {"id": "opencode", "group": "paid", "name": "OpenCode Zen", "base_url": "https://opencode.ai/zen/v1", "model": "glm-5.3", "key": True,
      "models": ["glm-5.3", "glm-5.3-flash", "kimi-k3", "deepseek-v4-pro", "deepseek-v4.1-flash", "qwen3.8-max", "minimax-m3", "mistral-large-4"],
      "key_url": "https://opencode.ai/auth", "note": "按量付费的聚合接口；这里只列了走 chat/completions 的模型，Claude / GPT / Grok 走专用接口、在本应用里用不了。"},

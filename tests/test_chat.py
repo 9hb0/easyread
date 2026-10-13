@@ -185,6 +185,48 @@ class ChatContextTest(unittest.TestCase):
         self.assertEqual(api.bodies[0].get("reasoning_effort"), "high")  # 面板里选的推理强度传到接口
         self.assertNotIn("reasoning_effort", api.bodies[1])              # 没选就不带这个参数，走模型配置
 
+    def test_go_session_is_reused_for_thread_but_not_new_conversation(self):
+        import urllib.request
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from easyread.library import Library
+        from easyread.server import Handler
+
+        cfg = {"openai": {"keys": {"opencode-go": "test-key"}},
+               "chat": {"default": "go", "models": [{"id": "go", "engine": "openai",
+                         "preset": "opencode-go", "model": "glm-5.3-flash"}]}}
+        app = SimpleNamespace(lib=Library(self.root.parent), token="test-token")
+        sessions = []
+        def stream(ecfg, *args):
+            sessions.append(ecfg["openai"]["session_id"])
+            yield "OK"
+        with patch.object(Handler, "app", app, create=True), \
+             patch("easyread.server.config.load", return_value=cfg), \
+             patch("easyread.server.chat.stream", side_effect=stream):
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                tid = None
+                for turn in range(3):
+                    payload = {"text": "hello", "model": "go"}
+                    if turn == 1:
+                        payload["thread"] = tid
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{server.server_address[1]}/api/p/{self.root.name}/chat",
+                        data=json.dumps(payload).encode(),
+                        headers={"Content-Type": "application/json", "X-Token": "test-token"})
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        events = [json.loads(line) for line in response]
+                    self.assertTrue(events[-1].get("done"), events)
+                    if turn == 0:
+                        tid = events[0]["thread"]
+            finally:
+                server.shutdown()
+                server.server_close()
+        self.assertEqual(sessions[0], sessions[1])
+        self.assertNotEqual(sessions[0], sessions[2])
+        self.assertNotIn("session_id", cfg["openai"])
+
 
 class ChatStreamTest(unittest.TestCase):
     def test_openai_stream_strips_think(self):

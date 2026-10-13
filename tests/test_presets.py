@@ -23,14 +23,16 @@ class PresetTest(unittest.TestCase):
         self.assertIn('g === "paid"', settings)
         self.assertIn("自定义提供商", settings)
 
-    def test_opencode_go_is_paid_preset_with_vision(self):
+    def test_opencode_go_defaults_to_compatible_text_model(self):
         by_id = {p["id"]: p for p in PRESETS}
         preset = by_id["opencode-go"]
         self.assertEqual(preset["group"], "paid")
-        self.assertEqual(preset["base_url"], "https://opencode.ai/zen/go/v1")
+        self.assertEqual(preset["base_url"], "https://opencode.ai/inference/go/v1")
         self.assertTrue(preset["key"])
         self.assertIn(preset["model"], preset["models"])
-        self.assertTrue(preset["vision"])
+        self.assertEqual(preset["model"], "glm-5.3-flash")
+        self.assertFalse(preset["vision"])
+        self.assertNotIn("grok-code", preset["models"])
 
     def test_opencode_zen_pay_as_you_go_is_paid_preset(self):
         by_id = {p["id"]: p for p in PRESETS}

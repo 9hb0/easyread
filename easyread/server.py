@@ -88,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
         model = chat_models.label(m)
         thread = chat_store.get(ws, body.get("thread"))
         tid = thread["id"] if thread else chat_store.new_id()
+        if ecfg["engine"] == "openai":
+            ecfg["openai"]["session_id"] = engines.api_session(ws.root, "chat:" + tid)
         refs = [{"anchor": str(r.get("anchor") or ""), "quote": str(r.get("quote") or "")[:1000]}
                 for r in (body.get("refs") or [])[:12] if isinstance(r, dict) and r.get("anchor")]
         first = refs[0] if refs else {}
@@ -292,8 +294,10 @@ class Handler(BaseHTTPRequestHandler):
             base_url = str(body.get("base_url") or cfg.get("openai", {}).get("base_url") or "")
             api_key = str(body.get("api_key") or "")
             if not api_key or api_key.startswith("••••"):
+                preset = str(body.get("preset") or "")
                 if body.get("scope") == "translation":
-                    api_key = cfg.get("openai", {}).get("api_key") or ""
+                    # 设置页还没保存时，按当前选中的服务商取 Key，别用上一次保存的那家
+                    api_key = chat_models._key(cfg, preset or cfg.get("openai", {}).get("preset") or "")
                 else:
                     model = next((m for m in (cfg.get("chat") or {}).get("models", []) if m.get("id") == body.get("model_id")), {})
                     api_key = model.get("api_key") or chat_models._key(cfg, model.get("preset") or "")

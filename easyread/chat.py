@@ -269,6 +269,10 @@ def _stream_openai(o: dict, text: str, cancel, images: list[Path] | None = None)
     base = engines.openai_base(o.get("base_url") or "")
     if not base or not o.get("model"):
         raise engines.EngineError("API 没填地址或模型")
+    protocol = engines.api_protocol(base, o["model"])
+    if protocol != "chat":
+        yield from _stream_anthropic_style(o, base, text, cancel, images or [], protocol)
+        return
     content: str | list = text
     if o.get("vision") and images:
         content = [{"type": "text", "text": text}] + [
@@ -277,9 +281,8 @@ def _stream_openai(o: dict, text: str, cancel, images: list[Path] | None = None)
     body = {"model": o["model"], "temperature": 0.4, "stream": True, "messages": [{"role": "user", "content": content}]}
     if o.get("reasoning_effort"):
         body["reasoning_effort"] = o["reasoning_effort"]
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
-    if o.get("api_key"):
-        headers["Authorization"] = "Bearer " + o["api_key"]
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
+               **engines.api_headers(base, o.get("api_key") or "", o.get("session_id") or "")}
     r = None
     for attempt in range(2):
         req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
@@ -325,3 +328,63 @@ def _stream_openai(o: dict, text: str, cancel, images: list[Path] | None = None)
                 yield piece
     if not got:
         raise engines.EngineError("接口没有返回回答内容，请检查 BASE_URL、模型名，或中转站是否支持流式输出")
+
+
+def _stream_anthropic_style(o: dict, base: str, text: str, cancel, images: list[Path], protocol: str) -> Iterator[str]:
+    """流式读 Responses（GPT / Grok）和 Messages（Claude / Qwen / MiniMax）两种协议的 SSE。"""
+    vision = o.get("vision") and images and engines.supports_vision(base, o["model"])
+    if protocol == "responses":
+        content = [{"type": "input_text", "text": text}]
+        if vision:
+            content += [{"type": "input_image", "image_url": u} for u in engines.vision_images(images)]
+        body = {"model": o["model"], "stream": True, "input": [{"role": "user", "content": content}]}
+        if o.get("reasoning_effort"):
+            body["reasoning"] = {"effort": engines.effort_for_responses(o["reasoning_effort"])}
+    else:
+        content = []
+        if vision:
+            content += [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                       "data": u.split(",", 1)[1]}} for u in engines.vision_images(images)]
+        content.append({"type": "text", "text": text})
+        body = {"model": o["model"], "max_tokens": int(o.get("max_tokens") or 32000), "stream": True,
+                "messages": [{"role": "user", "content": content}]}
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
+               **engines.api_headers(base, o.get("api_key") or "", o.get("session_id") or "")}
+    url = base + ("/responses" if protocol == "responses" else "/messages")
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
+    try:
+        r = urllib.request.urlopen(req, timeout=int(o.get("timeout") or 600))
+    except urllib.error.HTTPError as e:
+        detail = e.read()[:300].decode("utf-8", "replace")
+        raise engines.EngineError(f"接口返回 {e.code}{engines.http_hint(e.code)}：{detail}")
+    except Exception as e:  # noqa: BLE001
+        raise engines.EngineError(f"连不上接口：{e}")
+    got = False
+    with r:
+        for raw in r:
+            if cancel.is_set():
+                raise engines.Cancelled()
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                ev = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            kind = ev.get("type") or ""
+            if kind in ("response.failed", "error", "response.error"):
+                raise engines.EngineError("接口返回错误：" + str(ev.get("response", {}).get("error") or ev.get("error"))[:300])
+            if kind == "response.output_text.delta":
+                piece = ev.get("delta") or ""
+            elif kind == "content_block_delta" and (ev.get("delta") or {}).get("type") == "text_delta":
+                piece = (ev.get("delta") or {}).get("text") or ""
+            else:
+                continue  # 思考过程、签名、心跳等事件，读者不需要看
+            if piece:
+                got = True
+                yield piece
+    if not got:
+        raise engines.EngineError("接口没有返回回答内容，请检查模型名是否支持当前接口，或换个模型试试")

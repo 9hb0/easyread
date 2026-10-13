@@ -59,6 +59,27 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer relay-key")
         self.assertEqual(models, ["model-a", "model-b"])
 
+    def test_masked_translation_key_uses_the_selected_preset_key(self):
+        cfg = {"openai": {"preset": "deepseek", "api_key": "deepseek-key",
+                           "keys": {"deepseek": "deepseek-key", "opencode-go": "go-key"}}}
+        response = FakeResponse(json.dumps({"data": [{"id": "glm-5.3-flash"}]}))
+        with mock.patch.object(config, "load", return_value=cfg), \
+             mock.patch.object(engines.urllib.request, "urlopen", return_value=response) as open_url:
+            import easyread.server as server
+            body = {"scope": "translation", "preset": "opencode-go",
+                    "base_url": "https://opencode.ai/inference/go/v1", "api_key": "••••"}
+            handler = server.Handler.__new__(server.Handler)
+            handler.headers = {"X-Token": "test-token"}
+            handler.app = type("App", (), {"token": "test-token", "lib": type("Lib", (), {"ws": staticmethod(lambda pid: None)})()})()
+            handler.path = "/api/models"
+            with mock.patch.object(server.Handler, "_body", return_value=json.dumps(body)), \
+                 mock.patch.object(server.Handler, "_json", return_value=None) as send:
+                server.Handler.do_POST(handler)
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer go-key")
+        self.assertTrue(request.get_header("User-agent").startswith("easyread/"))
+        self.assertEqual(send.return_value, None)
+
     def test_root_openai_base_url_defaults_to_v1(self):
         self.assertEqual(engines.openai_base("https://www.aivalux.com"), "https://www.aivalux.com/v1")
         self.assertEqual(engines.openai_base("https://ark.example/api/plan/v3"), "https://ark.example/api/plan/v3")

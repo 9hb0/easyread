@@ -222,7 +222,7 @@
         this.sync(s);
         refresh.disabled = true;
         try {
-          const r = await PR.api("/api/models", { method: "POST", body: { scope: "translation", base_url: s.cfg.openai.base_url, api_key: s.cfg.openai.api_key } });
+          const r = await PR.api("/api/models", { method: "POST", body: { scope: "translation", preset: s.cfg.openai.preset, base_url: s.cfg.openai.base_url, api_key: s.cfg.openai.api_key } });
           s.apiModels = r.models || [];
           PR.toast("已读取 " + s.apiModels.length + " 个模型");
         } catch (err) { PR.toast("读取模型失败：" + PR.esc(err.message)); }
