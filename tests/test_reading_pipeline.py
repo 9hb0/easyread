@@ -1,4 +1,5 @@
 """A real two-page PDF through prepare, durable jobs and the reader HTTP API."""
+import copy
 import json
 import queue
 import shutil
@@ -68,13 +69,22 @@ class ReadingPipelineTest(unittest.TestCase):
             self.jobs.enqueue(self.ws)
             self.jobs._run_bulk(self.ws, self.ws.load("job"), threading.Event())
         self.assertEqual(self.ws.load("job")["state"], "done")
-        self.assertEqual(len(seen), 2)  # one normal two-page call plus final condensed synthesis
+        self.assertEqual(len(seen), 1)  # translation alone never invokes reading or synthesis
         paper = self.ws.load("paper")
         self.assertEqual(paper["translation"]["done_pages"], [1, 2])
         self.assertTrue((self.ws.root / "pages" / "page-001.webp").is_file())
-        self.assertTrue(paper["reading_guide"]["coverage"]["full_complete"])
-        self.assertTrue(paper["reading_guide"]["synth_of"])
-        Handler.app = SimpleNamespace(lib=self.lib, jobs=self.jobs, token="fixture-token")
+        for block in paper["blocks"]:
+            self.assertNotIn("highlights", block)
+            self.assertNotIn("annotations", block)
+        self.assertEqual(paper["reading"].get("insights", []), [])
+        self.assertEqual(paper["reading_guide"]["coverage"]["analyzed"], [])
+        self.assertFalse(paper["reading_guide"]["coverage"]["full_complete"])
+        self.assertFalse(paper["reading_guide"].get("synth_of"))
+        self.assertEqual([paper["reading"]["pages"][str(p)]["status"] for p in (1, 2)], ["pending", "pending"])
+        translated_blocks = copy.deepcopy(paper["blocks"])
+        app = mock.patch.object(Handler, "app", SimpleNamespace(lib=self.lib, jobs=self.jobs, token="fixture-token"), create=True)
+        app.start()
+        self.addCleanup(app.stop)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
@@ -83,6 +93,26 @@ class ReadingPipelineTest(unittest.TestCase):
         with urllib.request.urlopen(base + "/part/paper") as fetched:
             loaded = json.loads(fetched.read())["data"]
         self.assertEqual(loaded, paper)
+        request = urllib.request.Request(base + "/enrich", data=b'{}', headers={"X-Token": "fixture-token"})
+        with urllib.request.urlopen(request) as fetched:
+            queued = json.loads(fetched.read())
+        self.assertEqual(queued["type"], "enrich")
+        self.assertEqual(queued["pages"], [1, 2])
+        self.assertEqual(queued["state"], "queued")
+        with mock.patch.object(jobs.config, "load", return_value=self.cfg), \
+             mock.patch.object(translate.engines, "run", side_effect=engine):
+            self.jobs._run_bulk(self.ws, self.ws.load("job"), threading.Event())
+        self.assertEqual(self.ws.load("job")["state"], "done")
+        self.assertEqual(len(seen), 3)  # translate, explicit enrich, condensed synthesis
+        enriched = self.ws.load("paper")
+        self.assertEqual([{k: v for k, v in b.items() if k not in ("highlights", "annotations")}
+                          for b in enriched["blocks"]], translated_blocks)
+        self.assertTrue(enriched["reading_guide"]["coverage"]["full_complete"])
+        self.assertTrue(enriched["reading_guide"]["synth_of"])
+        self.assertEqual(enriched["blocks"][0]["highlights"][0]["quote"], "小模型")
+        self.assertEqual(enriched["blocks"][0]["annotations"][0]["source_refs"], synthesis["summary_refs"])
+        with urllib.request.urlopen(base + "/part/paper") as fetched:
+            self.assertEqual(json.loads(fetched.read())["data"], enriched)
         request = urllib.request.Request(base + "/enrich", data=b'{"pages":[1]}', headers={"X-Token": "fixture-token"})
         with urllib.request.urlopen(request) as fetched:
             self.assertEqual(json.loads(fetched.read())["type"], "enrich")

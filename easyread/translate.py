@@ -12,7 +12,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from . import engines, pdfwork, prompts, reading, sources, sourceblocks
+from . import engines, pdfwork, prompts, reading, reading_quality, sources, sourceblocks
 from .checks import block_problems, tex_problems
 from .log import log
 from .paperdata import add_discussion, merge_blocks, set_block_text
@@ -215,8 +215,8 @@ def _reading_check(data, batch):
     for block in data["blocks"]:
         found = reading.validate_highlights([block])
         problems.extend(found)
-        if found:
-            bad.add(block["page"])
+        # Invalid highlight anchors/optional fields are local, recoverable errors.
+        # Source-bearing annotations and insights below remain strict page failures.
     highlight_errors = len(problems)
     annotations = reading.validate_annotations(data["blocks"])
     problems.extend(annotations)
@@ -259,7 +259,16 @@ def _cap_density(blocks: list[dict]) -> int:
             items = b.get(key)
             if isinstance(items, list) and len(items) > cap:
                 dropped += len(items) - cap
-                b[key] = items[:cap]
+                if key == "highlights" and any(reading.normalize_importance(it.get("importance")) is not None for it in items):
+                    ranked = sorted(enumerate(items), key=lambda row: (
+                        -(reading.normalize_importance(row[1].get("importance")) or 0), row[0]))[:cap]
+                    text = reading.block_zh(b)
+                    def position(row):
+                        span = reading.locate_quote(text, row[1].get("quote"), row[1].get("occurrence", 0))
+                        return (span[0] if span else len(text), row[0])
+                    b[key] = [it for _, it in sorted(ranked, key=position)]
+                else:
+                    b[key] = items[:cap]
     return dropped
 
 
@@ -271,7 +280,6 @@ def journal(ws: Workspace, line: str) -> None:
 
 def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, cancel, say,
                tickets=None, versions=None) -> None:
-    reading_on = bool(cfg.get("reading_enabled", True))
     started = time.monotonic()
     source = sourceblocks.ensure(ws.root, batch)
     if tickets is None:
@@ -282,8 +290,8 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
     images = [pdfwork.engine_image(ws.root, n) for n in batch] if mode != "text" else []
     nxt = batch[-1] + 1
     prompt = prompts.translate(ws, batch, mode, _next_head(ws, nxt) if nxt <= total_pages else "",
-                               reading=reading_on, source=source)
-    text = _call(ws, cfg, prompt, images, cancel, "translate_reading" if reading_on else "translate", batch)
+                               reading=False, source=source)
+    text = _call(ws, cfg, prompt, images, cancel, "translate", batch)
     try:
         data = _normalize(engines.parse_json(text), batch, _taken(ws, batch), source)
     except engines.EngineError:
@@ -305,20 +313,10 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         (ws.root / "extract" / f"failed-{batch[0]:03d}.txt").write_text(text, encoding="utf-8")
         raise BatchIncomplete(batch, "模型译文不完整：未覆盖有效原文块或缺少译文")
     data["blocks"] = [b for b in data["blocks"] if b["page"] in good]
-    original = copy.deepcopy(data)
-    data["_raw_insights"] = copy.deepcopy(data.get("insights") or [])
-    rp, bad = _reading_check(data, good) if reading_on else ([], set())
-    if reading_on:
-        _journal_reading_validation(ws, good, data)
-    data.pop("_raw_insights", None)
-    if not reading_on:
-        data.pop("insights", None)
-        for block in data["blocks"]:
-            block.pop("highlights", None)
-            block.pop("annotations", None)
-    capped = _cap_density(data["blocks"])
-    if capped:
-        journal(ws, f"第 {good} 页有 {capped} 处标注超出密度上限，已丢弃")
+    data.pop("insights", None)
+    for block in data["blocks"]:
+        block.pop("highlights", None)
+        block.pop("annotations", None)
     current_source = sourceblocks.ensure(ws.root, batch)
     def guard(paper):
         _cancelled(cancel)
@@ -328,9 +326,8 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
         return True
     with _merge_lock:
         result = merge_blocks(ws, data, done=good, replace_pages=good, guard=guard,
-                              reading={"pages": good, "statuses": {p: "failed" if p in bad else "completed" for p in good},
-                                       "insights": data.get("insights") or [], "enabled": True} if reading_on else
-                              {"pages": good, "status": "skipped", "enabled": False})
+                              reading={"pages": good, "status": "pending" if cfg.get("reading_enabled", True) else "skipped",
+                                       "enabled": bool(cfg.get("reading_enabled", True))})
         if result.get("stale"):
             journal(ws, f"第 {batch} 页版本冲突：旧翻译结果已拒绝")
             return
@@ -340,21 +337,7 @@ def _one_batch(ws: Workspace, cfg: dict, batch: list[int], total_pages: int, can
                 action(ws.root)
             except Exception:
                 log.exception("原文定位/裁图失败 %s", ws.id)
-    # 合格译文已经可读。只有精读错误才用冻结译文作专项修复。
-    if rp:
-        journal(ws, f"第 {sorted(bad)} 页精读校验失败：" + "；".join(rp)[:600])
-        repair_blocks = [b for b in original["blocks"] if b["page"] in bad]
-        try:
-            _one_enrich(ws, cfg, sorted(bad), cancel, snapshot=ws.load("paper"),
-                        tickets=tickets, versions=versions,
-                        prompt=prompts.repair_reading(ws, sorted(bad), repair_blocks, rp), repair=False)
-        except engines.Cancelled:
-            raise
-        except Exception as exc:
-            journal(ws, f"第 {sorted(bad)} 页精读专项修复失败，译文已保留：{exc}")
-    paper = ws.load("paper")
-    reading_bad = [p for p in good if ((paper.get("reading") or {}).get("pages") or {}).get(str(p), {}).get("status") == "failed"]
-    journal(ws, f"第 {good} 页完成：用时 {round(time.monotonic() - started)} 秒，精读失败页 {reading_bad}")
+    journal(ws, f"第 {good} 页翻译完成：用时 {round(time.monotonic() - started)} 秒；精读可手动启动")
     if invalid:
         raise BatchIncomplete(invalid, f"第 {invalid} 页译文缺失；合格页面已保存")
 
@@ -460,14 +443,12 @@ def translate_pages(ws: Workspace, cfg: dict, pages: list[int], cancel, report) 
 
 
 def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, report) -> dict[int, str]:
-    """给已翻译的页面补精读标注：不动译文，只生成高亮和批注。
-    pages=None 时自动挑缺精读的页（没记过状态、failed、stale）。返回失败页 {页码: 原因}。"""
-    if not cfg.get("reading_enabled", True):
-        return {}
+    """给已翻译的页面单独生成精读标注：不动译文，只生成高亮和批注。
+    pages=None 时重做全部已译页。返回失败页 {页码: 原因}。"""
     paper = ws.load("paper")
     done = set(paper.get("translation", {}).get("done_pages", []))
     if pages is None:
-        pages = reading.pages_needing_reading(paper)
+        pages = sorted(done)
     else:
         pages = [p for p in pages if p in done]
     pages = sorted(pages)
@@ -477,7 +458,7 @@ def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, repo
     tickets, versions = _claim(ws, pages, source, cfg.get("_task_id"))
     size = max(1, int(cfg.get("batch_pages") or 2))
     batches = [pages[i:i + size] for i in range(0, len(pages), size)]
-    journal(ws, f"补精读开始：{len(pages)} 页，{len(batches)} 批")
+    journal(ws, f"精读开始：{len(pages)} 页，{len(batches)} 批")
     failed: dict[int, str] = {}
     lock = threading.Lock()
     processed = 0
@@ -496,7 +477,7 @@ def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, repo
             raise
         except Exception as exc:
             error = str(exc)[:300]
-            journal(ws, f"补精读第 {batch} 页失败：{error}")
+            journal(ws, f"精读第 {batch} 页失败：{error}")
             if _QUOTA.search(error):
                 quota = error
             with lock:
@@ -508,18 +489,18 @@ def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, repo
             ws.update("paper", mark)
         with lock:
             processed += len(batch)
-            report(processed, len(pages), f"补精读 {processed}/{len(pages)} 页" + (f"，失败 {len(failed)} 页" if failed else ""))
+            report(processed, len(pages), f"精读 {processed}/{len(pages)} 页" + (f"，失败 {len(failed)} 页" if failed else ""))
     with ThreadPoolExecutor(max_workers=max(1, min(8, int(cfg.get("concurrency") or 1)))) as pool:
         for future in [pool.submit(work, batch) for batch in batches]:
             future.result()
     _cancelled(cancel)
-    journal(ws, "补精读结束" + (f"，{len(failed)} 页失败：{sorted(failed)}" if failed else "，全部成功"))
+    journal(ws, "精读结束" + (f"，{len(failed)} 页失败：{sorted(failed)}" if failed else "，全部成功"))
     if not failed:
         try:
             finalize_reading(ws, cfg, cancel)  # 覆盖变全了就综合研究导航
         except engines.Cancelled:
             raise
-        except Exception as e:  # noqa: BLE001 —— 导航失败不影响补精读结果
+        except Exception as e:  # noqa: BLE001 —— 导航失败不影响精读结果
             journal(ws, f"研究导航综合失败：{e}")
             log.warning("研究导航综合失败 %s: %s", ws.id, e)
     return failed
@@ -527,7 +508,7 @@ def enrich_pages(ws: Workspace, cfg: dict, pages: list[int] | None, cancel, repo
 
 def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=None,
                 tickets=None, versions=None, prompt=None, repair=True) -> set[int]:
-    """一批已译页的补精读：拿现有译文问模型要标注，校验后写回块。"""
+    """一批已译页的手动精读：用现有译文生成标注，校验后写回块。"""
     snapshot = snapshot or ws.load("paper")
     if tickets is None:
         tickets, versions = _claim(ws, batch, sourceblocks.ensure(ws.root, batch))
@@ -542,18 +523,18 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
     except engines.EngineError as exc:
         if not repair:
             raise
-        journal(ws, f"补精读第 {batch} 页 JSON 解析失败，按固定译文修复一次")
+        journal(ws, f"第 {batch} 页精读 JSON 解析失败，按固定译文修复一次")
         return _one_enrich(ws, cfg, batch, cancel, snapshot=snapshot, tickets=tickets,
                            versions=versions, prompt=prompts.repair_reading(ws, batch, targets, [str(exc)]),
                            repair=False)
     items = data.get("blocks") if isinstance(data, dict) else data
     if not isinstance(items, list):
-        raise engines.EngineError("补精读返回里没有 blocks")
+        raise engines.EngineError("精读结果里没有 blocks")
     known = {b["id"] for b in targets}
     known_items = [it for it in items if isinstance(it, dict) and it.get("id") in known]
     reviewed = set(data.get("reviewed_pages") or []) if isinstance(data, dict) else set()
     if not known_items and not reviewed.issuperset(batch):
-        raise engines.EngineError("补精读未返回有效文字块或已分析页码")
+        raise engines.EngineError("精读结果未返回有效文字块或已分析页码")
     clean = _clean_enrich_items(ws, items, batch, snapshot, preserve=was_repair)
     raw_clean = copy.deepcopy(clean)
     package = {"blocks": clean, "insights": data.get("insights") if isinstance(data, dict) else [],
@@ -564,7 +545,7 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
         problems.append("精读结果引用未提供的文字块")
         bad.update(batch)
     if problems:
-        journal(ws, f"补精读第 {batch} 页校验问题：" + "；".join(problems)[:1000])
+        journal(ws, f"第 {batch} 页精读校验问题：" + "；".join(problems)[:1000])
     original = [b for b in raw_clean if b["page"] in bad]
     _cap_density(clean)
     current_source = sourceblocks.ensure(ws.root, batch)
@@ -589,14 +570,15 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
             reading.drop_insights_on_pages((paper.get("reading") or {}).get("insights", []), batch), package["insights"])
         reading.apply_reading_state(paper, batch, statuses, True)
         reading.rebuild_guide(paper)
+        reading_quality.rebuild_quality(paper)
         return True
 
     with _merge_lock:
         accepted = ws.update("paper", apply)
     if not accepted:
-        journal(ws, f"补精读第 {batch} 页版本冲突：旧标注已拒绝")
+        journal(ws, f"第 {batch} 页精读版本冲突：旧标注已拒绝")
         return set(batch)
-    journal(ws, f"补精读第 {batch} 页完成" + (f"，{len(problems)} 处标注不合格已丢弃" if problems else ""))
+    journal(ws, f"第 {batch} 页精读完成" + (f"，{len(problems)} 处标注不合格已丢弃" if problems else ""))
     if bad and repair:
         try:
             return _one_enrich(ws, cfg, sorted(bad), cancel, snapshot=ws.load("paper"), tickets=tickets,
@@ -604,16 +586,17 @@ def _one_enrich(ws: Workspace, cfg: dict, batch: list[int], cancel, snapshot=Non
         except engines.Cancelled:
             raise
         except engines.EngineError as exc:
-            journal(ws, f"补精读第 {sorted(bad)} 页专项修复失败：{exc}")
+            journal(ws, f"第 {sorted(bad)} 页精读专项修复失败：{exc}")
     return bad
 
 
 def finalize_reading(ws: Workspace, cfg: dict, cancel=None) -> bool:
-    """翻译（或补精读）收尾：程序重建研究导航；范围全覆盖且 insights 有更新时做一次模型综合。
+    """手动精读收尾：程序重建研究导航；范围全覆盖且 insights 有更新时做一次模型综合。
     返回是否做了模型综合。"""
-    if not cfg.get("reading_enabled", True):
-        return False
-    ws.update("paper", reading.rebuild_guide)
+    def rebuild(paper):
+        reading.rebuild_guide(paper)
+        reading_quality.rebuild_quality(paper)
+    ws.update("paper", rebuild)
     paper = ws.load("paper")
     guide = paper.get("reading_guide") or {}
     coverage = guide.get("coverage") or {}

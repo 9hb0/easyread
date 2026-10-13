@@ -4,7 +4,8 @@
   const S = PR.state;
   const GROUPS = [
     ["background", "关键背景"], ["related_work", "相关工作"], ["problem", "研究问题"],
-    ["method", "提出的方法"], ["innovation", "核心创新"], ["evidence", "主要证据"], ["limitation", "重要局限"],
+    ["method", "提出的方法"], ["innovation", "核心创新"], ["evidence", "主要证据"],
+    ["finding", "关键结论"], ["limitation", "局限性"],
   ];
   const STATUS = { provisional: "待验证", supported: "有原文依据", unsupported: "证据不足" };
   const array = (v) => Array.isArray(v) ? v : [];
@@ -64,7 +65,7 @@
       r && ids.has(r.from) && ids.has(r.to) && r.from !== r.to && typeof r.content === "string" && r.content.trim() && refs.length) : [];
     if (relations.length) body += '<div class="gd-group"><div class="gd-gt">逻辑关系</div>' +
       relations.map(({ r, refs }) => itemHtml(r, refs, true)).join("") + "</div>";
-    if (!items.length && !summaryRefs.length) body += '<div class="gd-empty">还没有有效的研究要点。<br>翻译完成后自动生成；<br>旧论文可从顶栏“标注”补精读。</div>';
+    if (!items.length && !summaryRefs.length) body += '<div class="gd-empty">还没有有效的研究要点。<br>请从顶栏“标注”手动启动精读。</div>';
     // 保留 pageview.js 已绑定拖动/键盘事件的面板握柄。
     let content = PR.$(".gd-content", el);
     if (!content) { content = PR.el("div", { class: "gd-content" }); el.appendChild(content); }

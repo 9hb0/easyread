@@ -1,8 +1,8 @@
-"""AI 精读预处理：六色语义高亮的校验与定位。
+"""AI 精读预处理：八类语义高亮的校验与定位。
 
 翻译批次里模型顺带返回的 highlights 由这里校验：
 类别合法、quote 是该块最终译文的连续子串、occurrence 能唯一定位、彼此不重叠。
-校验通过的才存进 paper.json，其余丢弃并报告问题（交给翻译修复流程重试一次）。
+定位和类别校验通过的才存进 paper.json；非法可选评分或理由只丢字段并报告问题。
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import re
 from .store import now_iso, text_hash
 
 READING_VERSION = 2
+PROMPT_VERSION = 1
 
 # 顺序即前端筛选按钮顺序；颜色集中定义在 web/css/base.css 的 --sem-* 变量
 CATEGORIES = {
@@ -22,6 +23,8 @@ CATEGORIES = {
     "method": "提出的方法",
     "innovation": "核心创新",
     "evidence": "论据实验",
+    "finding": "关键结论",
+    "limitation": "局限性",
 }
 
 ANNOTATION_TYPES = {
@@ -30,7 +33,7 @@ ANNOTATION_TYPES = {
     "design_rationale": "设计动机",
     "formula": "公式",
     "experiment": "实验",
-    "limitation": "局限",
+    "limitation": "局限性",
     "question": "疑问",
 }
 
@@ -47,14 +50,20 @@ INSIGHT_TYPES = {
     "method": "方法",
     "innovation": "创新",
     "evidence": "证据",
-    "limitation": "局限",
+    "finding": "关键结论",
+    "limitation": "局限性",
 }
 
 INSIGHT_STATUSES = ("provisional", "supported", "unsupported")
 RELATION_STATUSES = INSIGHT_STATUSES
 GUIDE_GROUPS = (("background", "background"), ("related_work", "related_work"), ("problems", "problem"),
                 ("methods", "method"), ("innovations", "innovation"), ("evidence", "evidence"),
-                ("limitations", "limitation"))
+                ("findings", "finding"), ("limitations", "limitation"))
+
+
+def normalize_importance(value) -> int | None:
+    """只接受 1–5 的内置整数，不能把布尔值、浮点数或字符串转成评分。"""
+    return value if type(value) is int and 1 <= value <= 5 else None
 
 
 def block_zh(block: dict) -> str:
@@ -254,9 +263,22 @@ def validate_highlights(blocks: list[dict]) -> list[str]:
             if span is None:
                 problems.append(f"{bid}：高亮引文无法在兼容的译文片段中定位：{str(quote)[:40]}")
                 continue
-            if any(span == previous and cat == item["category"] for item, previous in candidates):
+            item = {"block_id": bid, "category": cat, "quote": quote, "occurrence": occ}
+            if "importance" in h:
+                importance = normalize_importance(h["importance"])
+                if importance is None:
+                    problems.append(f"{bid}：高亮 importance 必须是 1–5 的整数")
+                else:
+                    item["importance"] = importance
+            if "reason" in h:
+                reason = h["reason"].strip() if isinstance(h["reason"], str) else ""
+                if not reason or len(reason) > 120:
+                    problems.append(f"{bid}：高亮 reason 必须是非空字符串且不超过 120 字")
+                else:
+                    item["reason"] = reason
+            if any(span == previous and cat == candidate["category"] for candidate, previous in candidates):
                 continue
-            candidates.append(({"block_id": bid, "category": cat, "quote": quote, "occurrence": occ}, span))
+            candidates.append((item, span))
         conflicts = set()
         for k, (_, (s, e)) in enumerate(candidates):
             for j in range(k):
@@ -342,7 +364,7 @@ def validate_annotations(blocks: list[dict]) -> list[str]:
 
 
 def validate_reading(blocks: list[dict]) -> list[str]:
-    """一次校验高亮 + 批注（翻译批次和补精读共用）。"""
+    """一次校验精读高亮和批注。"""
     return validate_highlights(blocks) + validate_annotations(blocks)
 
 
@@ -613,7 +635,7 @@ def pages_needing_reading(paper: dict, only_missing: bool = True) -> list[int]:
 
 
 def apply_reading_state(paper: dict, pages: list[int], status, enabled: bool) -> None:
-    """翻译批次落库时更新页面级精读状态（在 paper.json 的同一次写里调用）。
+    """翻译或手动精读落库时更新页面级精读状态（在 paper.json 的同一次写里调用）。
     status 可以是统一字符串，也可以是 {页码: 状态}。"""
     reading = paper.setdefault("reading", {})
     reading["version"] = READING_VERSION
@@ -630,3 +652,5 @@ def apply_reading_state(paper: dict, pages: list[int], status, enabled: bool) ->
         states[str(p)] = {"status": st, "version": READING_VERSION, "zh_hash": page_hash(blocks, p),
                           "content_hash": page_content_hash(blocks, p),
                           "source_version": source_version, "highlights": hl, "annotations": ann}
+        if st == "completed":
+            states[str(p)]["prompt_version"] = PROMPT_VERSION

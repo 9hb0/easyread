@@ -30,7 +30,6 @@ DEFAULTS = {
     "auto_translate": True,      # 导入后自动开始翻译
     "batch_pages": 2,            # 每次交给模型的页数
     "concurrency": 1,            # 同时翻译几批
-    "reading_enabled": True,     # 翻译时同步生成六色语义高亮等精读标注（关闭则纯翻译）
     "claude": {"command": "claude", "model": "", "reasoning_effort": "", "extra_args": [], "timeout": 1200},
     "codex": {"command": "codex", "model": "", "reasoning_effort": "", "extra_args": [], "timeout": 1200},
     "openai": {"preset": "", "base_url": "", "api_key": "", "model": "", "reasoning_effort": "", "vision": False, "timeout": 600},

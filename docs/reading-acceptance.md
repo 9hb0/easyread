@@ -1,5 +1,60 @@
 # AI 精读验收报告
 
+## 本轮八类高亮验收（2026-10-13）
+
+本轮基于 `2a4e321f241d966518fe045d6865af4f5ae608d7`，工作分支 `codex/semantic-highlights`。保留任务开始前已有的翻译/手动精读分离改动。代码尚未提交或发布，以下是本次运行证据，不引用历史测试次数作为本轮结果。
+
+实现范围：八类分类、可选重要性/理由、三档密度、分类显示/候选统计、关键结论导航、有界历史候选摘要、可重建的完全重复派生缓存、高亮单条错误隔离。版本仍为 `READING_VERSION=2`；新完成页记录 `prompt_version=1`，质量缓存 `version=1`。人工质量未验收，“重复质控（试验）”默认关闭。
+
+### 本次测试与数据保护
+
+- Python全量：292项通过、0失败、0错误，日志 `artifacts/reading-qa/semantic-unit.log`。基线为215项、8失败、5错误，其中旧流程断言与已有手动精读改动冲突，以及第三方同名tests包抢占导入；已更新等价保护断言并固定本地tests包。
+- 浏览器：65项通过、0失败，日志 `artifacts/reading-qa/semantic-browser.log`，覆盖八类、旧数据、三档、零请求、来源跳转、明暗/移动/键盘及质量失效。40页样本各30次切换测得P95：密度21.30ms、类别21.10ms（点击到两帧完成；未作旧版同设备基线对照）。截图在 `tests/shots/reading-semantic-desktop-menu.png`、`reading-semantic-mobile-dark.png`，为隔离测试夹具。
+- 端到端：`tests/e2e.cjs` 全部通过；隔离临时文献库覆盖搜索、复制/选择、笔记、人工划线、译文修改、离线续存和移动布局。日志 `artifacts/reading-qa/semantic-e2e.log`。
+- 四个UI接线检查通过：reading、deepread、discuss-delete、settings-deepread。
+- 独立审查发现并修复两个问题：不可见的保留项不能抑制仍可见的旧候选；高亮 `block_id` 变化必须使派生缓存失效。已先复现失败，再通过对应浏览器和Python回归；日志 `review-red-*` / `review-green-*`。
+- 15个原论文 `paper.json` 与准备阶段备份逐字一致；原始译文与存储候选没有被验收脚本改写。运行中的reader/chat变化保持原样，未用备份覆盖用户新操作。记录 `artifacts/reading-qa/paper-preservation.json`。
+- 可重现命令：`python -m unittest discover -s tests`、`node --test tests/reading-browser.cjs`、`node tests/reading-ui-check.cjs`。端到端如需指定已有Playwright，设置 `PLAYWRIGHT` 为本地模块路径。
+
+### 固定译文、同模型两页提示词对照
+
+使用现有 OpenAI兼容通道 `claude-haiku-5-5`，LingBot-Map第12、19页。旧臂从起始提交提取提示词；新臂使用最终提示词。两臂共用当前确定性校验、相同原文和固定译文，未重新翻译，也未运行导航综合。随机性使用引擎默认参数、未固定，故这是小样本功能确认，不能当作质量门槛达标。
+
+| 指标 | 旧提示词 | 最终新提示词 |
+| --- | --- | --- |
+| 保存候选 | 9 | 15 |
+| 有重要性评分 | 0 | 15 |
+| finding / limitation | 0 / 0 | 5 / 3 |
+| 来源校验失败页 | 0 | 0 |
+| 精读模型调用 | 1 | 1 |
+| 总耗时 | 55.609秒 | 50.609秒 |
+| 引擎上报输入+输出Token | 22,196 | 19,843 |
+| 译文/公式/表格修改 | 0 | 0 |
+
+最终对照在 `artifacts/reading-qa/semantic-ab-20261013-184526/report.json`。新规则摘要SHA256为 `e24c4a67b195fd23df76b1fc8f7342d08cbf58c4bee27d5a0212651d46589f31`。首轮新臂在提示词最终调整前生成，留档但不作为最终验收；第二轮复用旧臂、只重跑最终新臂。本次真实模型实际共3次调用，无额外模型审阅。调用耗时和用量均保存在副本的 `metrics.jsonl`，未读取或导出凭据。
+
+复现：`python tests/reading_semantic_ab.py --run`（会消耗配置模型额度）；指定 `--reuse-old <report.json>` 可复用同模型同页的旧臂。
+
+### 三篇缓存论文与人工待验收项
+
+`python tests/reading_quality_check.py` 在独立副本上比较相同缓存输出的本地质控，不调用模型。三篇原候选66/78/101条保持不变，当前页面有效且锚点可定位的候选共226条；失败/过时页没有参与抑制。完全重复规则没有找到可确认的重复句，所以本批去重数量为0，不能声称跨章节重复减少30%。近义重复保留给人工复核。
+
+对照记录：`artifacts/reading-qa/semantic-v1/cached-comparison.json`。双人独立复核表：同目录 `human-review.json`，历史有效226条加最终新臂15条，共241条覆盖八类，包含中英文材料、类别与各自必要性/类别/重复/证据判断字段，初始均未填写。finding有5条、limitation有3条，仍需更多样本核查。
+
+仍待验证：至少两位阅读者的金标准、必要性≥85%、分类准确率≥90%、核心召回降幅≤5个百分点、跨章节重复降低≥30%、作者事实严重幻觉0例。F22已检查提示词材料隔离、白名单和伪造来源拒绝；真实模型面对恶意论文指令的行为尚未专项验收。功能回归通过不等于这些人工或对抗指标通过。
+
+### 回滚与兼容
+
+旧六类无需重译；无评分候选各档仍显示。译文/来源变更时旧页面仍失效，质量哈希失配则忽略抑制。关闭“重复质控”或选择“显示重复项”即可恢复重复候选显示；切换密度或类别不产生模型调用。保持翻译/手动精读分离；纯翻译 `reading_enabled=false` 路径仍通过，显式精读保持可手动执行。
+
+准备阶段备份目录：`C:/Users/Axiaoxin/AppData/Local/Temp/easyread-semantic-20261013-182434`。备份只作还原参考，不自动覆盖当前论文、笔记和运行期保存。
+
+最终回归后确认本地服务无活动后台任务、无外部模型连接，已在原地址 `http://127.0.0.1:8765` 重启并取得健康检查200。刷新阅读页即可加载新版；旧候选仍兼容，手动重做精读才会生成新两类和评分。
+
+---
+
+## 历史六类验收（以下记录属于2026-10-12）
+
 记录日期：2026-10-12。四阶段已分别提交，回归与真实论文抽检结果如下。
 
 ## 修改说明
@@ -91,7 +146,7 @@ Codex CLI 用量来自 JSONL 的 `turn.completed`，缓存 token 不重复累加
 
 ## 可观测性
 
-`job.log` 逐批记录高亮、批注、研究要点的校验错误数与失败页。`metrics.jsonl` 记录正常翻译、补精读、局部修复、综合四类调用的引擎、模型、耗时与用量。余额不足会停止尚未启动的批次，不产生重复计费调用。
+`job.log` 逐批记录高亮、批注、研究要点的校验错误数与失败页。`metrics.jsonl` 记录正常翻译、手动精读、局部修复、综合四类调用的引擎、模型、耗时与用量。余额不足会停止尚未启动的批次，不产生重复计费调用。
 
 ## 已知限制
 
@@ -103,7 +158,7 @@ Codex CLI 用量来自 JSONL 的 `turn.completed`，缓存 token 不重复累加
 
 ## 关闭与回滚
 
-- 关闭精读：设置 `reading_enabled` 为 `false`，或 `python -m easyread enrich` 不执行。
-- 旧论文补精读：`python -m easyread enrich PAPER_ID --all`。
+- 翻译与精读分开：翻译不触发 AI 标注；用户从阅读页“标注”面板或运行 `python -m easyread enrich PAPER_ID` 手动精读，默认重跑全部已译页。
+- 指定范围：`python -m easyread enrich PAPER_ID --pages 3-5`；`--all` 保留为显式重跑全篇的兼容参数。
 - 原文变化：重新 prepare 后使用 enrich 补处理，旧定位与精读自动失效，无须重译。
-- 彻底回滚：`reading_enabled` 关闭后走原有纯翻译流程，paper.json 中的精读字段不影响阅读。
+- 精读数据保存在 `paper.json`，不改译文；重译页面后对应的旧精读标注自动失效。

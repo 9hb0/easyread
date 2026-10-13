@@ -180,6 +180,8 @@ mark.sem.cat-problem { background: color-mix(in srgb, var(--sem-problem) 30%, tr
 mark.sem.cat-method { background: color-mix(in srgb, var(--sem-method) 28%, transparent); }
 mark.sem.cat-innovation { background: color-mix(in srgb, var(--sem-innovation) 26%, transparent); }
 mark.sem.cat-evidence { background: color-mix(in srgb, var(--sem-evidence) 34%, transparent); }
+mark.sem.cat-finding { background: color-mix(in srgb, var(--sem-finding) 26%, transparent); }
+mark.sem.cat-limitation { background: color-mix(in srgb, var(--sem-limitation) 26%, transparent); }
 mark.sem:hover, mark.sem.active { box-shadow: inset 0 -2px 0 color-mix(in srgb, currentColor 55%, transparent); }
 mark.sem:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 :root[data-theme="dark"] mark.sem.cat-background { background: color-mix(in srgb, var(--sem-background) 44%, transparent); }
@@ -188,6 +190,8 @@ mark.sem:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; 
 :root[data-theme="dark"] mark.sem.cat-method { background: color-mix(in srgb, var(--sem-method) 40%, transparent); }
 :root[data-theme="dark"] mark.sem.cat-innovation { background: color-mix(in srgb, var(--sem-innovation) 38%, transparent); }
 :root[data-theme="dark"] mark.sem.cat-evidence { background: color-mix(in srgb, var(--sem-evidence) 46%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-finding { background: color-mix(in srgb, var(--sem-finding) 38%, transparent); }
+:root[data-theme="dark"] mark.sem.cat-limitation { background: color-mix(in srgb, var(--sem-limitation) 38%, transparent); }
 
 /* 筛选弹层和类别圆点 */
 .rf-list { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
@@ -202,6 +206,17 @@ mark.sem:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; 
 .dot.cat-method { background: var(--sem-method); }
 .dot.cat-innovation { background: var(--sem-innovation); }
 .dot.cat-evidence { background: var(--sem-evidence); }
+.dot.cat-finding { background: var(--sem-finding); }
+.dot.cat-limitation { background: var(--sem-limitation); }
+.rf-density, .rf-quality { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px; }
+.rf-summary { padding: 4px; color: var(--ink-2); font-size: .88em; }
+.rf-hint, .rf-quality small { color: var(--ink-2); font-size: .82em; }
+.rf-hint { padding: 2px 4px 6px; max-width: 310px; }
+.rf-quality { border-top: 1px solid var(--rule); margin-top: 4px; }
+.rf-quality small { flex-basis: 100%; }
+.rf-score { padding: 4px 2px; font-size: .88em; color: var(--ink-2); }
+.rf-reason { padding: 6px 2px; font-size: .9em; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rf-reason b { display: block; font-weight: 500; margin-bottom: 2px; }
 .rf-btns { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 4px 2px; }
 .rf-pop { padding: 4px 2px; color: var(--ink-2); }
 
@@ -217,13 +232,13 @@ mark.sem:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; 
 .reading-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
 button.reading-source { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--rule); border-radius: 5px; padding: 3px 7px; font: 12px/1.5 var(--ui); cursor: pointer; }
 button.reading-source:hover { background: var(--accent-soft-2); }
-.reading-source:focus-visible, .rf-row:focus-visible, .rf-btns button:focus-visible, .reading-close:focus-visible, .note-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reading-source:focus-visible, .rf-row:focus-visible, .rf-btns button:focus-visible, .rf-density button:focus-visible, .rf-quality button:focus-visible, .reading-close:focus-visible, .note-pin:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #popover:has([data-reading-close]) { box-sizing: border-box; max-width: min(520px, calc(100vw - 16px)); max-height: calc(100dvh - 76px); overflow-y: auto; overflow-wrap: anywhere; padding-right: 34px; }
 .reading-close { position: absolute; top: 7px; right: 7px; width: 25px; height: 25px; border-radius: 5px; font-size: 20px; color: var(--ink-3); }
 .reading-close:hover { background: var(--accent-soft); }
 @media (max-width: 760px) {
   #popover:has([data-reading-close]) { max-height: calc(100dvh - 76px); }
-  .rf-btns .btn { min-height: 36px; }
+  .rf-btns .btn, .rf-density .btn, .rf-quality .btn { min-height: 36px; }
   .reading-source { min-height: 32px; }
 }
 code { font: .86em var(--mono); background: var(--accent-soft); padding: .1em .3em; border-radius: 3px; }
