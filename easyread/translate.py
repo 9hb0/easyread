@@ -87,6 +87,74 @@ def _next_head(ws: Workspace, n: int) -> str:
     return p.read_text(encoding="utf-8")[:1500] if p.exists() else ""
 
 
+def _skipped_sources(data, source):
+    skipped = set()
+    for b in source["blocks"]:
+        box = b.get("box")
+        if (b["en"].strip() == str(b["page"]) and box is not None
+                and .9 <= box[1] < box[3] <= 1 and .4 <= (box[0] + box[2]) / 2 <= .6):
+            skipped.add(b["id"])
+    for item in data.get("skipped_blocks") or []:
+        if isinstance(item, dict) and item.get("reason") in {"header", "footer", "page_number", "watermark"}:
+            skipped.add(item.get("block_id"))
+    return skipped
+
+
+def _reference_blocks(data, source, used_sources):
+    """Recover omitted reference blocks only from complete, exactly matched numbered entries."""
+    def compact(text):
+        # PDFium represents some discretionary hyphens as U+FFFE (see sourceblocks._aligned).
+        return re.sub(r"\s+", "", text).replace("\ufffe", "-")
+
+    references = {}
+    for ref in data.get("references") or []:
+        if not isinstance(ref, dict) or not isinstance(ref.get("text"), str):
+            continue
+        rid, text = str(ref.get("id") or ""), compact(ref["text"])
+        if rid.isdecimal() and text:
+            references[rid] = text if text.startswith("[") else f"[{rid}]" + text
+    if not references:
+        return []
+
+    skipped, groups, group = _skipped_sources(data, source), [], []
+    for block in source["blocks"]:
+        if block["id"] in skipped:
+            continue
+        starts_entry = re.match(r"^\s*\[\d+\]", block["en"])
+        if starts_entry:
+            if group:
+                groups.append(group)
+            group = []
+        if starts_entry or group:
+            group.append(block)
+    if group:
+        groups.append(group)
+
+    verified = set()
+    for group in groups:
+        text = compact("\n".join(b["en"] for b in group))
+        rid = re.match(r"^\[(\d+)\]", text).group(1)
+        if references.get(rid) == text:
+            verified.update(b["id"] for b in group)
+
+    # Fill only consecutive gaps; merging across existing blocks would reorder sources.
+    chunks, chunk = [], []
+    for block in source["blocks"]:
+        if block["id"] in skipped:
+            continue
+        recover = block["id"] in verified and block["id"] not in used_sources
+        if chunk and (not recover or block["page"] != chunk[-1]["page"]):
+            chunks.append(chunk)
+            chunk = []
+        if recover:
+            chunk.append(block)
+    if chunk:
+        chunks.append(chunk)
+    return [{"id": blocks[0]["id"], "page": blocks[0]["page"], "type": "references",
+             "en": "References", "zh": "参考文献", "source_ids": [b["id"] for b in blocks],
+             "source_en": "\n".join(b["en"] for b in blocks)} for blocks in chunks]
+
+
 def _normalize(data: dict, pages: list[int], taken: set[str], source: dict | None = None) -> dict:
     """补页码、去掉和已有块撞车的 id、丢掉明显无效的块。"""
     if isinstance(data, list):
@@ -128,6 +196,12 @@ def _normalize(data: dict, pages: list[int], taken: set[str], source: dict | Non
         if b["type"] == "figure":
             b.setdefault("src", "")
         blocks.append(b)
+    if source is not None:
+        order = {b["id"]: i for i, b in enumerate(source["blocks"])}
+        for block in _reference_blocks(data, source, used_sources | taken):
+            pos = next((i for i, b in enumerate(blocks) if order[b["id"]] > order[block["id"]]), len(blocks))
+            blocks.insert(pos, block)
+            taken.add(block["id"])
     data["blocks"] = blocks
     return data
 
@@ -189,15 +263,7 @@ def _call(ws, cfg, prompt, images, cancel, kind, pages):
 def _translation_pages(data, source, batch):
     """Cover all body sources; a geometrically proven footer numeral is page furniture."""
     covered = {i for b in data["blocks"] for i in b.get("source_ids", [b["id"]])}
-    for b in source["blocks"]:
-        box = b.get("box")
-        if (b["en"].strip() == str(b["page"]) and box is not None
-                and .9 <= box[1] < box[3] <= 1 and .4 <= (box[0] + box[2]) / 2 <= .6):
-            covered.add(b["id"])
-    allowed_skips = {"header", "footer", "page_number", "watermark"}
-    for item in data.get("skipped_blocks") or []:
-        if isinstance(item, dict) and item.get("reason") in allowed_skips:
-            covered.add(item.get("block_id"))
+    covered.update(_skipped_sources(data, source))
     valid = []
     for p in batch:
         src = [b for b in source["blocks"] if b["page"] == p]
@@ -205,7 +271,7 @@ def _translation_pages(data, source, batch):
         missing_text = any((b.get("type") in ("para", "heading", "note") and not str(b.get("zh") or "").strip())
                            or (b.get("type") == "list" and (not b.get("items") or any(not it.get("zh") for it in b["items"])))
                            or (b.get("type") == "math" and not b.get("tex")) for b in blocks)
-        if all(b["id"] in covered for b in src) and not missing_text and (blocks or not src or data.get("references") or src and all(b["id"] in covered for b in src)):
+        if all(b["id"] in covered for b in src) and not missing_text:
             valid.append(p)
     return valid
 

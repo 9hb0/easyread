@@ -38,6 +38,7 @@ SCHEMA = """输出格式：只输出一个 JSON 对象，不要任何别的文�
 - {"id":"refs","type":"references","page":10,"zh":"参考文献","en":"References"}
 示例中的 id 仅说明格式。实际 id 必须从输入的原文块列表选择，绝不能自行起名。
 合并原文块（例如表格）时，id 取第一个来源块，并用 source_ids 列出全部被合并的来源 id；不能遗漏原文块。
+参考文献续页也必须每页输出一个 references 块，source_ids 列出本页全部文献条目的来源 id（不含页码）；不能只填顶层 references 数组而省略来源块。
 页眉、页脚、页码、水印等无需翻译的块放入顶层 skipped_blocks 数组，每条 {"block_id":"提供的 id","reason":"header|footer|page_number|watermark"}。
 注意 JSON 里 TeX 的反斜杠要写两个（\\\\frac、\\\\text、\\\\bar）。字符串里的中文引号用“”或「」，不要出现没转义的英文双引号 "。表格和图放在正文第一次提到它的段落之后。"""
 
