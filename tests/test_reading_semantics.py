@@ -143,13 +143,13 @@ class FindingStateTest(unittest.TestCase):
         paper = self.paper()
         reading.apply_reading_state(paper, [1], "completed", True)
         self.assertEqual(paper["reading"]["pages"]["1"]["version"], 2)
-        self.assertEqual(paper["reading"]["pages"]["1"].get("prompt_version"), 1)
+        self.assertEqual(paper["reading"]["pages"]["1"].get("prompt_version"), 2)
         for status in ("pending", "failed", "skipped", "stale", "invalid"):
             with self.subTest(status=status):
                 reading.apply_reading_state(paper, [2], status, False)
                 self.assertNotIn("prompt_version", paper["reading"]["pages"]["2"])
         self.assertEqual(reading.READING_VERSION, 2)
-        self.assertEqual(getattr(reading, "PROMPT_VERSION", None), 1)
+        self.assertEqual(getattr(reading, "PROMPT_VERSION", None), 2)
 
     def test_legacy_completed_state_is_current_and_not_backfilled(self):
         paper = self.paper()
@@ -164,7 +164,7 @@ class FindingStateTest(unittest.TestCase):
     def test_noncompleted_rewrite_drops_previous_prompt_version(self):
         paper = self.paper()
         reading.apply_reading_state(paper, [1], "completed", True)
-        self.assertEqual(paper["reading"]["pages"]["1"].get("prompt_version"), 1)
+        self.assertEqual(paper["reading"]["pages"]["1"].get("prompt_version"), 2)
         reading.apply_reading_state(paper, [1], "stale", True)
         self.assertNotIn("prompt_version", paper["reading"]["pages"]["1"])
 

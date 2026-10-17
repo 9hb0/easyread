@@ -13,7 +13,7 @@ import re
 from .store import now_iso, text_hash
 
 READING_VERSION = 2
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 # 顺序即前端筛选按钮顺序；颜色集中定义在 web/css/base.css 的 --sem-* 变量
 CATEGORIES = {

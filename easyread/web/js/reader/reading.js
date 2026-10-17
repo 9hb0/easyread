@@ -4,6 +4,7 @@
   "use strict";
   const S = PR.state;
   PR.READING_VERSION = 2;
+  PR.READING_PROMPT_VERSION = 2;
   PR.READING_CATS = [
     ["background", "背景知识"], ["related_work", "相关工作"], ["problem", "解决的问题"],
     ["method", "提出的方法"], ["innovation", "核心创新"], ["evidence", "论据实验"],
@@ -84,7 +85,7 @@
         h.quote ?? null, h.occurrence ?? 0, importance(h), b.type ?? null, b.role ?? null, h.block_id ?? null,
         own(h, "source_refs") ? [true, h.source_refs] : [false, null]]);
     }
-    return PR.hashText(JSON.stringify([PR.READING_VERSION, 1, 1, rd.version ?? null, done, pageRows, candidateRows]));
+    return PR.hashText(JSON.stringify([PR.READING_VERSION, PR.READING_PROMPT_VERSION, 1, rd.version ?? null, done, pageRows, candidateRows]));
   };
   function qualitySuppressed() {
     const q = ((S.paper || {}).reading || {}).quality;
