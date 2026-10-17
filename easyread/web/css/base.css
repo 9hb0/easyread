@@ -23,13 +23,15 @@
   --hl-pink: rgba(226, 92, 92, .26);
   --ul-yellow: #d9a42a; --ul-green: #5b9a52; --ul-blue: #4a82c3; --ul-pink: #d0473f;
   --hl-q: rgba(45, 97, 115, .16);
-  /* AI 精读六色语义高亮：类别定义见 web/js/reader/reading.js，渲染样式在 reader.css */
+  /* AI 精读八类语义高亮：类别定义见 web/js/reader/reading.js，渲染样式在 reader.css */
   --sem-background: #9CA3AF;
   --sem-related_work: #3B82F6;
   --sem-problem: #F59E0B;
   --sem-method: #22C55E;
   --sem-innovation: #A855F7;
   --sem-evidence: #EAB308;
+  --sem-finding: #0D9488;
+  --sem-limitation: #EF4444;
   --focus: rgba(45, 97, 115, .05);
   --shadow: 0 1px 2px rgba(35, 33, 29, .05), 0 8px 28px rgba(35, 33, 29, .10);
   --shadow-lg: 0 2px 6px rgba(35, 33, 29, .06), 0 24px 60px rgba(35, 33, 29, .18);

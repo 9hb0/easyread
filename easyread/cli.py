@@ -4,7 +4,7 @@
   easyread list                           列出文献库
   easyread import 论文.pdf|arXiv编号 [--no-translate]
   easyread translate ID [--pages 3-5]     排队翻译（需要服务在跑；否则直接前台译）
-  easyread enrich ID [--pages 3-5] [--all]  补精读（高亮+批注），不动译文；默认只补缺的页
+  easyread enrich ID [--pages 3-5] [--all]  手动精读（高亮+批注），不动译文；默认重跑全部已译页
   easyread status ID                      译文进度、用户改过的译文、笔记、待回答的问题
   easyread blocks ID --from 批次.json [--done 4-6] [--replace]
   easyread discuss ID --from 讨论.json | --delete 讨论ID
@@ -106,7 +106,7 @@ def cmd_translate(a):
         urllib.request.urlopen(req)
         out("已交给服务排队翻译，进度在文献库页面上看。")
         return
-    from .translate import translate_pages, finalize_reading
+    from .translate import translate_pages
     cfg = config.load()
     paper = ws.load("paper")
     done = set(paper.get("translation", {}).get("done_pages", []))
@@ -114,32 +114,30 @@ def cmd_translate(a):
     failed = translate_pages(ws, cfg, pages, threading.Event(), lambda d, t, m: out(f"[{d}/{t}] {m}"))
     if failed:
         out(f"没译成功的页：{sorted(failed)}，原因见 {ws.root / 'job.log'}")
-    else:
-        finalize_reading(ws, cfg)
 
 
 def cmd_enrich(a):
     ws = find(a.id)
-    pages = paperdata.parse_pages(a.pages) if a.pages else None
+    paper = ws.load("paper")
+    translated = sorted(set(paper.get("translation", {}).get("done_pages", [])))
+    pages = paperdata.parse_pages(a.pages) if a.pages else translated
     if a.all:
-        paper = ws.load("paper")
-        pages = sorted(set(paper.get("translation", {}).get("done_pages", [])))
+        pages = translated
     url = running_server()
     if url:
         token = json.loads(urllib.request.urlopen(url + "/api/library").read())["token"]
         req = urllib.request.Request(f"{url}/api/p/{ws.id}/enrich", data=json.dumps({"pages": pages}).encode(),
                                      headers={"X-Token": token, "Content-Type": "application/json"})
         urllib.request.urlopen(req)
-        out("已交给服务补精读，译文保留；服务重启后可继续。")
+        out("已交给服务手动精读，译文保留；服务重启后可继续。")
         return
     from .translate import enrich_pages
     cfg = config.load()
     failed = enrich_pages(ws, cfg, pages, threading.Event(), lambda d, t, m: out(f"[{d}/{t}] {m}"))
     if failed:
-        out(f"补精读没成功的页：{sorted(failed)}，原因见 {ws.root / 'job.log'}")
+        out(f"精读没成功的页：{sorted(failed)}，原因见 {ws.root / 'job.log'}")
     else:
-        n = len(pages) if pages is not None else "缺精读的"
-        out(f"补精读完成（{n} 页）")
+        out(f"精读完成（{len(pages)} 页）")
 
 
 def cmd_status(a):
@@ -251,7 +249,7 @@ def main(argv=None):
     p = sub.add_parser("list"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("import"); p.add_argument("source"); p.add_argument("--no-translate", action="store_true"); p.set_defaults(fn=cmd_import)
     p = sub.add_parser("translate"); p.add_argument("id"); p.add_argument("--pages"); p.set_defaults(fn=cmd_translate)
-    p = sub.add_parser("enrich"); p.add_argument("id"); p.add_argument("--pages"); p.add_argument("--all", action="store_true", help="已译页全部重做精读（默认只补缺的）")
+    p = sub.add_parser("enrich"); p.add_argument("id"); p.add_argument("--pages"); p.add_argument("--all", action="store_true", help="重跑全部已译页（默认行为，保留兼容）")
     p.set_defaults(fn=cmd_enrich)
     for name, fn in (("status", cmd_status), ("check", cmd_check), ("locate", cmd_locate), ("export", cmd_export)):
         p = sub.add_parser(name); p.add_argument("id"); p.set_defaults(fn=fn)

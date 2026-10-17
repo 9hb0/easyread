@@ -43,19 +43,21 @@ class Jobs:
             active.set()
         self._write(ws, type="translate" if translate_after else "prepare", state="queued", message="排队中",
                     pages=pages, scope=scope or "all", translate=translate_after, task_id=uuid.uuid4().hex,
-                    reading_enabled=bool(config.load().get("reading_enabled", True)), done=0, total=0, error="", failed={})
+                    done=0, total=0, error="", failed={})
         self.bulk.put(ws.id)
 
     def enqueue_enrich(self, ws: Workspace, pages: list[int] | None = None):
-        """Use the existing durable queue, including cancellation and restart recovery."""
+        """Queue manual reading for all translated pages, or the explicitly selected pages."""
         current = ws.load("job") or {}
         if current.get("state") in ("queued", "running"):
             if current.get("type") == "enrich":
                 return current
-            raise ValueError("这篇论文正在翻译，当前批次完成后再补精读")
-        self._write(ws, type="enrich", state="queued", message="补精读排队中", pages=pages,
-                    task_id=uuid.uuid4().hex, translate=False, reading_enabled=True,
-                    done=0, total=0, error="", failed={})
+            raise ValueError("这篇论文正在翻译，当前批次完成后再开始精读")
+        if pages is None:
+            pages = sorted(set(ws.load("paper").get("translation", {}).get("done_pages", [])))
+        self._write(ws, type="enrich", state="queued", message="精读排队中", pages=pages,
+                    task_id=uuid.uuid4().hex, translate=False,
+                    resume=False, done=0, total=0, error="", failed={})
         self.bulk.put(ws.id)
         return ws.load("job")
 
@@ -104,7 +106,7 @@ class Jobs:
                 self.cancels.pop(pid, None)
 
     def _run_bulk(self, ws: Workspace, job: dict, cancel: threading.Event):
-        cfg = dict(config.load(), reading_enabled=job.get("reading_enabled", True))
+        cfg = config.load()
         task_id = job.get("task_id") or uuid.uuid4().hex
         cfg["_task_id"] = task_id
         if not job.get("task_id"):
@@ -119,12 +121,14 @@ class Jobs:
         if job.get("type") == "enrich":
             paper = ws.load("paper")
             wanted = job.get("pages")
-            needed = set(reading.pages_needing_reading(paper))
-            if wanted is not None and job.get("resume"):
+            if wanted is None:
+                wanted = sorted(set(paper.get("translation", {}).get("done_pages", [])))
+            if job.get("resume"):
+                needed = set(reading.pages_needing_reading(paper))
                 wanted = [p for p in wanted if p in needed]
             failed = translate.enrich_pages(ws, cfg, wanted, cancel, report)
             write(state="partial" if failed else "done", failed={str(p): e for p, e in failed.items()},
-                        error=next(iter(failed.values()), ""), message=f"补精读失败 {len(failed)} 页，译文保留" if failed else "补精读完成")
+                        error=next(iter(failed.values()), ""), message=f"精读失败 {len(failed)} 页，译文保留" if failed else "精读完成")
             return
         if not ws.load("paper").get("meta", {}).get("pages"):
             write(state="running", message="正在渲染原页、抽取文字")
@@ -141,29 +145,11 @@ class Jobs:
         cfg["_target_pages"] = wanted if not job.get("pages") else all_pages
         cfg["_scope"] = "pages" if job.get("pages") else job.get("scope", "all")
         if not pages:
-            if cfg.get("reading_enabled", True):
-                try:
-                    translate.finalize_reading(ws, cfg, cancel)
-                except Cancelled:
-                    raise
-                except Exception as exc:
-                    translate.journal(ws, f"研究导航整合失败：{exc}")
-                    write(guide_error=str(exc)[:300])
             write(state="done", message="选定范围已译完")
             return
 
         started = time.time()
         failed = translate.translate_pages(ws, cfg, pages, cancel, report)
-        if not failed and cfg.get("reading_enabled", True):
-            try:
-                report(len(pages), len(pages), "正在整合研究导航")
-                translate.finalize_reading(ws, cfg, cancel)
-            except Cancelled:
-                raise
-            except Exception as e:  # noqa: BLE001 —— 导航失败不算翻译失败
-                translate.journal(ws, f"研究导航整合失败：{e}")
-                log.warning("研究导航整合失败 %s: %s", ws.id, e)
-                write(guide_error=str(e)[:300])
         minutes = max(1, round((time.time() - started) / 60))
         if failed:
             first = next(iter(failed.values()))
@@ -213,7 +199,7 @@ class Jobs:
                     deepread.set_state(ws, state="running", message="模型思考中", error="")
                     deepread.generate(ws, cfg, None)
                     obsidian.auto_sync(ws, cfg)
-                elif job["kind"] == "enrich":  # 只补精读：不动译文
+                elif job["kind"] == "enrich":  # 手动精读：不动译文
                     translate.enrich_pages(ws, cfg, job.get("pages"), None,
                                             lambda d, t, m: job.update(message=m))
                 job["state"], job["message"] = "done", "完成"

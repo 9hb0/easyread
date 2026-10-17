@@ -1,12 +1,14 @@
-/* 六色精读。先校验页面绑定，再把保存的 quote 精确映射到译文文本节点。
+/* 八类精读。先校验页面绑定，再把保存的 quote 精确映射到译文文本节点。
    Markdown 保留原始位置；公式、引用链接和列表分隔符不包裹。 */
 (function (PR) {
   "use strict";
   const S = PR.state;
   PR.READING_VERSION = 2;
+  PR.READING_PROMPT_VERSION = 2;
   PR.READING_CATS = [
     ["background", "背景知识"], ["related_work", "相关工作"], ["problem", "解决的问题"],
     ["method", "提出的方法"], ["innovation", "核心创新"], ["evidence", "论据实验"],
+    ["finding", "关键结论"], ["limitation", "局限性"],
   ];
   const CAT = Object.fromEntries(PR.READING_CATS);
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -60,6 +62,52 @@
     return PR.hashText(records.join("\u241e"));
   }
   PR.readingContentHash = contentHash;
+  const importance = (h) => Number.isInteger(h.importance) && h.importance >= 1 && h.importance <= 5 ? h.importance : null;
+  const DENSITIES = [["lite", "精简"], ["standard", "标准"], ["deep", "深度"]];
+  const densityValid = (v) => DENSITIES.some(([id]) => id === v);
+  const highlightKey = (id, h) => [id, h.category, h.occurrence ?? 0, PR.hashText(h.quote)].join("|");
+  function zhHash(page) {
+    return PR.hashText(blocks().filter((b) => Number(b.page) === Number(page)).map((b) => blockText(b, true)).filter(Boolean).join("\n"));
+  }
+  PR.readingQualityInputHash = function () {
+    const p = S.paper || {}, tr = p.translation || {}, rd = p.reading || {}, done = tr.done_pages || [];
+    const pages = [...new Set([...blocks().map((b) => b.page), ...array(done)].filter(Number.isInteger))].sort((a, b) => a - b);
+    const pageRows = pages.map((page) => {
+      const st = (rd.pages || {})[page] || {};
+      return [page, (tr.source_versions || {})[page] ?? null, st.status ?? null, st.version ?? null,
+        st.zh_hash ?? null, st.content_hash ?? null, st.source_version ?? null, st.prompt_version ?? null,
+        zhHash(page), contentHash(page)];
+    });
+    const candidateRows = [];
+    for (const b of blocks()) for (const h of array(b.highlights)) {
+      if (!h || typeof h !== "object" || Array.isArray(h)) continue;
+      candidateRows.push([b.id ?? null, b.page ?? null, highlightKey(b.id || "", h), h.category ?? null,
+        h.quote ?? null, h.occurrence ?? 0, importance(h), b.type ?? null, b.role ?? null, h.block_id ?? null,
+        own(h, "source_refs") ? [true, h.source_refs] : [false, null]]);
+    }
+    return PR.hashText(JSON.stringify([PR.READING_VERSION, PR.READING_PROMPT_VERSION, 1, rd.version ?? null, done, pageRows, candidateRows]));
+  };
+  function qualitySuppressed() {
+    const q = ((S.paper || {}).reading || {}).quality;
+    // 每次显示重新验证输入；不复用上一次 apply 的旧哈希或抑制集合。
+    if (!q || q.version !== 1 || typeof q.input_hash !== "string" || q.input_hash !== PR.readingQualityInputHash()) return new Set();
+    // A suppressed candidate must still have a visible, valid representative in
+    // the current density/category view. Legacy unrated items may outlive a
+    // low-scored canonical; DOM/source validation can also hide that canonical.
+    const visible = new Set(), filter = { ...PR.readingFilter, quality: false };
+    for (const b of blocks()) for (const { h } of dataFor(b).highlights) {
+      if (PR.shouldShowHighlight(h, filter, null)) visible.add(highlightKey(h.block_id, h));
+    }
+    return new Set(array(q.suppressed).filter((r) => r && r.reason === "exact_duplicate" &&
+      typeof r.key === "string" && typeof r.canonical_key === "string" && r.key !== r.canonical_key &&
+      visible.has(r.canonical_key)).map((r) => r.key));
+  }
+  PR.shouldShowHighlight = function (h, f, suppressed) {
+    if (f.off || (f.only && f.only !== h.category)) return false;
+    const score = importance(h), threshold = f.density === "lite" ? 5 : f.density === "deep" ? 2 : 4;
+    if (score !== null && score < threshold) return false;
+    return !f.quality || f.showSuppressed || !suppressed || !suppressed.has(highlightKey(h.block_id, h));
+  };
 
   PR.readingPageValid = function (page) {
     const p = S.paper || {}, tr = p.translation || {}, reading = p.reading || {};
@@ -215,7 +263,9 @@
   PR.hasReadingMarks = () => blocks().some((b) => dataFor(b).highlights.length);
 
   const saved = PR.ls.get("pr-reading-filter", {});
-  PR.readingFilter = { off: !!(saved && saved.off), only: saved && own(CAT, saved.only) ? saved.only : "" };
+  PR.readingFilter = { off: !!(saved && saved.off), only: saved && own(CAT, saved.only) ? saved.only : "",
+    density: saved && densityValid(saved.density) ? saved.density : "standard",
+    quality: !!(saved && saved.quality === true), showSuppressed: !!(saved && saved.showSuppressed === true) };
   let opener = null, enrichPending = false;
   const readingPop = () => { const p = PR.$("#popover"); return p && p.classList.contains("open") && p.querySelector("[data-reading-close]") ? p : null; };
   function closePop(focus) {
@@ -283,10 +333,10 @@
     if (popupMark) closePop(false);
     unwrap(scope);
     if (PR.readingFilter.off) { if (focusAt) PR.$('[data-act="reading"]')?.focus({ preventScroll: true }); return; }
-    const plans = [];
+    const plans = [], suppressed = PR.readingFilter.quality ? qualitySuppressed() : null;
     for (const b of blocks()) {
       if (onlyBlock && b.id !== onlyBlock) continue;
-      for (const p of dataFor(b).highlights) if (!PR.readingFilter.only || p.h.category === PR.readingFilter.only) plans.push({ ...p, block: b.id });
+      for (const p of dataFor(b).highlights) if (PR.shouldShowHighlight(p.h, PR.readingFilter, suppressed)) plans.push({ ...p, block: b.id });
     }
     wrapPlans(plans);
     if (focusAt) (PR.$$("mark.sem", scope).find((m) => m.dataset.block === focusAt.block && m.dataset.start === focusAt.start && m.dataset.cat === focusAt.cat) ||
@@ -294,44 +344,70 @@
   };
   PR.saveReadingFilter = function (f) {
     PR.readingFilter = { off: f.off == null ? PR.readingFilter.off : !!f.off,
-      only: f.only == null ? PR.readingFilter.only : own(CAT, f.only) ? f.only : "" };
+      only: f.only == null ? PR.readingFilter.only : own(CAT, f.only) ? f.only : "",
+      density: f.density == null ? PR.readingFilter.density : densityValid(f.density) ? f.density : "standard",
+      quality: f.quality == null ? PR.readingFilter.quality : f.quality === true,
+      showSuppressed: f.showSuppressed == null ? PR.readingFilter.showSuppressed : f.showSuppressed === true };
     PR.ls.set("pr-reading-filter", PR.readingFilter);
     PR.applyReadingMarks();
   };
 
-  PR.toggleReadingFilter = function (anchor, focusCat) {
-    const c = {};
-    for (const b of blocks()) for (const { h } of dataFor(b).highlights) c[h.category] = (c[h.category] || 0) + 1;
-    const f = PR.readingFilter, need = PR.readingPagesNeeding();
+  PR.toggleReadingFilter = function (anchor, focusSelector) {
+    const f = PR.readingFilter, translated = PR.readingTranslatedPages();
+    const c = {}, shown = {}, suppressed = f.quality ? qualitySuppressed() : null;
+    let total = 0, visible = 0, unrated = 0;
+    for (const b of blocks()) for (const { h } of dataFor(b).highlights) {
+      total++; c[h.category] = (c[h.category] || 0) + 1;
+      if (importance(h) === null) unrated++;
+      if (PR.shouldShowHighlight(h, f, suppressed)) { visible++; shown[h.category] = (shown[h.category] || 0) + 1; }
+    }
     const rows = PR.READING_CATS.map(([id, name]) => '<button type="button" class="rf-row' + (!f.off && f.only === id ? " on" : "") +
-      '" data-cat="' + id + '" aria-pressed="' + (!f.off && f.only === id) + '"><i class="dot cat-' + id +
-      '"></i><span>' + name + '</span><b>' + (c[id] || 0) + "</b></button>").join("");
-    openPop(anchor, '<div class="hd">语义高亮</div><div class="rf-list">' + rows + '</div><div class="rf-btns">' +
+      '" data-cat="' + id + '" aria-pressed="' + (!f.off && f.only === id) + '"' +
+      (id === "limitation" ? ' title="作者明确陈述的局限性"' : "") + '><i class="dot cat-' + id +
+      '"></i><span>' + name + '</span><b>' + (shown[id] || 0) + " / " + (c[id] || 0) + "</b></button>").join("");
+    const density = DENSITIES.map(([id, name]) => '<button type="button" class="btn sm line' + (f.density === id ? " on" : "") +
+      '" data-density="' + id + '" aria-pressed="' + (f.density === id) + '">' + name + "</button>").join("");
+    openPop(anchor, '<div class="hd">语义高亮</div><div class="rf-density" role="group" aria-label="高亮密度">' + density +
+      '</div><div class="rf-summary">当前显示 ' + visible + " / 全部有效候选 " + total + "</div>" +
+      (unrated ? '<div class="rf-hint">' + unrated + " 条旧标注未评级，各档保留；可手动精读更新。</div>" : "") +
+      '<div class="rf-list">' + rows + '</div><div class="rf-quality">' +
+      '<button type="button" class="btn sm line' + (f.quality ? " on" : "") + '" data-f="quality" aria-pressed="' + f.quality + '">重复质控（试验）</button>' +
+      '<button type="button" class="btn sm line' + (f.showSuppressed ? " on" : "") + '" data-f="showSuppressed" aria-pressed="' + f.showSuppressed + '">显示重复项</button>' +
+      '<small>尚未人工验收</small></div><div class="rf-btns">' +
       '<button type="button" class="btn sm line" data-f="all">显示全部</button>' +
       '<button type="button" class="btn sm line" data-f="off">' + (f.off ? "开启高亮" : "关闭高亮") + "</button>" +
-      (PR.store.mode === "server" && need.length ? '<button type="button" class="btn sm line" data-f="enrich"' +
-        (enrichPending ? " disabled" : "") + '>补精读 ' + need.length + " 页</button>" : "") + "</div>", "语义高亮筛选", focusCat ? '[data-cat="' + focusCat + '"]' : null);
+      (PR.store.mode === "server" && translated.length ? '<button type="button" class="btn sm line" data-f="enrich"' +
+        (enrichPending ? " disabled" : "") + '>手动精读全部 ' + translated.length + " 页</button>" : "") + "</div>", "语义高亮筛选", focusSelector);
     PR.$("#popover").onclick = (ev) => {
       if (ev.target.closest("[data-reading-close]")) { closePop(true); return; }
       const row = ev.target.closest(".rf-row[data-cat]");
       if (row) {
         PR.saveReadingFilter({ only: f.only === row.dataset.cat && !f.off ? "" : row.dataset.cat, off: false });
-        PR.toggleReadingFilter(anchor, row.dataset.cat); return;
+        PR.toggleReadingFilter(anchor, '[data-cat="' + row.dataset.cat + '"]'); return;
+      }
+      const densityBtn = ev.target.closest("[data-density]");
+      if (densityBtn) {
+        PR.saveReadingFilter({ density: densityBtn.dataset.density });
+        PR.toggleReadingFilter(anchor, '[data-density="' + densityBtn.dataset.density + '"]'); return;
       }
       const btn = ev.target.closest("[data-f]");
       if (!btn) return;
+      if (["quality", "showSuppressed"].includes(btn.dataset.f)) {
+        PR.saveReadingFilter({ [btn.dataset.f]: !f[btn.dataset.f] });
+        PR.toggleReadingFilter(anchor, '[data-f="' + btn.dataset.f + '"]'); return;
+      }
       closePop(true);
       if (btn.dataset.f === "enrich") { runEnrich(); return; }
       PR.saveReadingFilter({ only: "", off: btn.dataset.f === "off" && !f.off });
     };
   };
   async function runEnrich() {
-    const pages = PR.readingPagesNeeding();
+    const pages = PR.readingTranslatedPages();
     if (!pages.length || enrichPending || PR.store.mode !== "server") return;
     enrichPending = true;
     try {
       await PR.api("/api/p/" + PR.pid + "/enrich", { method: "POST", body: { pages } });
-      PR.toast("精读补处理已排队，完成后自动显示");
+      PR.toast("已排队精读全部 " + pages.length + " 页，完成后自动显示");
     } catch (err) { PR.toast("排队失败：" + err.message); }
     finally { enrichPending = false; }
   }
@@ -344,8 +420,11 @@
       PR.esc(PR.READING_ANN_TYPES[a.type]) + '</span><span class="basis">' + PR.esc(PR.READING_ANN_BASES[a.basis]) + '</span>' +
       '<div class="q">「' + PR.esc(a.anchor_quote) + '」</div><div>' + PR.mdBlocks(a.content) + '</div><div class="reading-sources">' + PR.readingSourceHtml(a) + "</div></div>").join("");
     const cat = hit.h.category, only = PR.readingFilter.only;
+    const score = importance(hit.h), reason = typeof hit.h.reason === "string" ? hit.h.reason.trim() : "";
+    const metadata = '<div class="rf-score">' + (score === null ? "未评级" : "重要性 " + score + " / 5") + "</div>" +
+      (reason ? '<div class="rf-reason"><b>标注理由</b><div>' + PR.esc(reason) + "</div></div>" : "");
     openPop(m, '<div class="hd"><i class="dot cat-' + cat + '"></i>' + PR.esc(CAT[cat]) + '</div><div class="rf-pop">' +
-      PR.esc(hit.h.quote) + '</div>' + annHtml + '<div class="reading-sources">' + PR.readingSourceHtml(hit.h) +
+      PR.esc(hit.h.quote) + '</div>' + metadata + annHtml + '<div class="reading-sources">' + PR.readingSourceHtml(hit.h) +
       '</div><div class="rf-btns"><button type="button" class="btn sm line" data-f="only">' +
       (only === cat ? "取消只看" : "只看此类") + "</button></div>", CAT[cat] + "精读批注");
     PR.$("#popover").onclick = (ev) => {
@@ -384,9 +463,9 @@
   function syncToolbar() {
     const btn = PR.$('[data-act="reading"]');
     if (!btn) return;
-    const needs = PR.readingPagesNeeding();
-    btn.style.display = (PR.store.mode === "server" && PR.readingTranslatedPages().length) || PR.hasReadingMarks() ? "" : "none";
-    btn.title = needs.length ? "语义高亮筛选 · 可补精读 " + needs.length + " 页" : "语义高亮筛选";
+    const translated = PR.readingTranslatedPages();
+    btn.style.display = (PR.store.mode === "server" && translated.length) || PR.hasReadingMarks() ? "" : "none";
+    btn.title = translated.length && PR.store.mode === "server" ? "语义高亮筛选 · 手动精读全部 " + translated.length + " 页" : "语义高亮筛选";
   }
   PR.on("rendered", () => { PR.applyReadingMarks(); syncToolbar(); });
   PR.on("block-rendered", () => { PR.applyReadingMarks(); syncToolbar(); PR.renderMargin && PR.renderMargin(); PR.emit("reading-changed"); });

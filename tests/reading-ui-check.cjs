@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const assert = require("node:assert/strict");
+const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const readerHtml = fs.readFileSync(path.join(root, "easyread/web/reader.html"), "utf8");
@@ -27,7 +29,7 @@ check(marginJs.includes('src === "reading"'), "margin must render reading annota
 check(marginJs.includes("card reading"), "reading cards must use the reading card class");
 check(readingJs.includes("READING_ANN_TYPES") && readingJs.includes("runEnrich"), "reading.js must label annotation types and offer enrich");
 check(readingJs.includes("/enrich"), "reading.js must call the enrich API");
-for (const cat of ["background", "related_work", "problem", "method", "innovation", "evidence"]) {
+for (const cat of ["background", "related_work", "problem", "method", "innovation", "evidence", "finding", "limitation"]) {
   check(baseCss.includes("--sem-" + cat + ":"), "base.css must define --sem-" + cat);
   check(readerCss.includes("mark.sem.cat-" + cat), "reader.css must style mark.sem.cat-" + cat);
   check(readerCss.includes(".dot.cat-" + cat), "reader.css must style the ." + cat + " filter dot");
@@ -39,5 +41,26 @@ check(guideJs.includes("PR.toggleGuide") && guideJs.includes("reading_guide"), "
 check(guideJs.includes("data-goto"), "guide items must jump to source blocks");
 check(pageviewJs.includes('name === "guide"'), "openSide must support the guide panel");
 check(fs.readFileSync(path.join(root, "easyread/web/css/reader-panels.css"), "utf8").includes("#guidepanel"), "panel CSS must include #guidepanel");
+
+// Exercise the production display rule as well as the existing CSS/wiring checks.
+const PR = { state: { paper: { blocks: [] } }, ls: { get: () => ({ off: true, only: "method" }) }, on() {}, hashText: () => "fixture" };
+vm.runInNewContext(readingJs, { window: { PR }, document: { addEventListener() {} }, Node: {} });
+assert.equal(PR.READING_VERSION, 2, "optional metadata cannot stale v2 pages");
+assert.equal(PR.readingFilter.density, "standard");
+assert.equal(PR.readingFilter.quality, false);
+assert.equal(PR.readingFilter.showSuppressed, false);
+assert.equal(PR.readingFilter.off, true); assert.equal(PR.readingFilter.only, "method");
+assert.equal(typeof PR.shouldShowHighlight, "function");
+for (const [density, expected] of [["lite", [false, false, false, false, true]],
+  ["standard", [false, false, false, true, true]], ["deep", [false, true, true, true, true]]]) {
+  for (let score = 1; score <= 5; score++) {
+    assert.equal(PR.shouldShowHighlight({ importance: score, category: "finding" }, { density }), expected[score - 1]);
+  }
+  for (const importance of [undefined, null, true, 0, 6, 3.5, "5"]) {
+    assert.equal(PR.shouldShowHighlight({ importance, category: "finding" }, { density }), true, "unscored legacy candidates remain visible");
+  }
+}
+assert.equal(PR.shouldShowHighlight({ category: "finding", importance: 5 }, { density: "deep", off: true }), false);
+assert.equal(PR.shouldShowHighlight({ category: "finding", importance: 5 }, { only: "limitation" }), false);
 console.log("reading UI checks passed");
 

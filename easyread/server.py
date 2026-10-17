@@ -367,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                     pages = sorted(int(k) for k in ((ws.load("job") or {}).get("failed") or {})) or None
                 app.jobs.enqueue(ws, pages=pages, translate_after=True, scope=body.get("scope"))
                 return self._json(200, {"ok": True})
-            if action == "enrich":  # 只补精读：不重译，给已译页面补高亮和批注
+            if action == "enrich":  # 手动精读：不重译，只给已译页面生成高亮和批注
                 pages = None
                 if body.get("all"):
                     pages = sorted(set(ws.load("paper").get("translation", {}).get("done_pages", [])))

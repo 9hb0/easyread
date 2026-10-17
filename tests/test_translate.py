@@ -93,6 +93,23 @@ class TranslateTest(unittest.TestCase):
         entries = self.ws.load("discussion").get("entries", [])
         self.assertEqual([(e["kind"], e["anchor"]) for e in entries], [("check", "tab1")])
 
+    def test_reference_only_batch_is_saved_without_repeating_the_model_call(self):
+        for page, number in ((1, 17), (2, 18)):
+            (self.ws.root / "extract" / f"page-{page:03d}.txt").write_text(
+                f"[{number}] A. Author.\n\nReference {number}. 2025.", encoding="utf-8")
+        response = json.dumps({"blocks": [], "references": [
+            {"id": str(number), "text": f"A. Author. Reference {number}. 2025."} for number in (17, 18)]})
+        with mock.patch.object(engines, "run", return_value=response) as run:
+            failed = translate.translate_pages(self.ws, dict(self.cfg, batch_pages=2), [1, 2],
+                                               threading.Event(), lambda *a: None)
+        self.assertEqual(failed, {})
+        self.assertEqual(run.call_count, 1)
+        paper = self.ws.load("paper")
+        self.assertEqual(paper["translation"]["done_pages"], [1, 2])
+        self.assertEqual([r["id"] for r in paper["references"]], ["17", "18"])
+        self.assertEqual([(b["page"], b["type"], b["source_ids"]) for b in paper["blocks"]], [
+            (1, "references", ["p1-1", "p1-2"]), (2, "references", ["p2-1", "p2-2"])])
+
     def test_figures_are_materialized_from_located_boxes(self):
         self.ws.update("paper", lambda p: p.__setitem__("blocks", [{"id": "fig1", "type": "figure", "page": 2, "src": ""}]))
         write_json_atomic(self.ws.root / "layout.json", {"fig1": {"page": 2, "box": [0.1, 0.2, 0.9, 0.7]}})
